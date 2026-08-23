@@ -78,7 +78,7 @@ async def schedule_check(
 ) -> str:
     """Schedule a forced immediate re-check of a host or service."""
     client = get_client()
-    now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    now = time.strftime("%m-%d-%Y %H:%M:%S", time.gmtime())
 
     if service_description:
         form_data = {
