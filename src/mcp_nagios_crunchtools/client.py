@@ -70,9 +70,15 @@ class NagiosClient:
         if response.status_code != 200:
             raise NagiosApiError(response.status_code, response.text[:200])
         body = response.text
-        if "error" in body.lower() and "successfully" not in body.lower():
-            raise NagiosApiError(200, body[:300])
-        return "Command submitted successfully"
+        if "successfully submitted" in body.lower():
+            return "Command submitted successfully"
+        if "errorMessage" in body:
+            import re
+
+            errors = re.findall(r"errorMessage'>([^<]+)", body)
+            msg = "; ".join(errors) if errors else "Unknown command error"
+            raise NagiosApiError(200, msg)
+        return "Command submitted"
 
 
 _client: NagiosClient | None = None
