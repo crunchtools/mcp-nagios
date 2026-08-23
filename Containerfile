@@ -1,11 +1,4 @@
-FROM quay.io/hummingbird/python:latest-builder AS builder
-
-WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src/ ./src/
-RUN pip install --no-cache-dir .
-
-FROM quay.io/hummingbird/python:latest
+FROM quay.io/hummingbird/python:latest-builder
 
 LABEL name="mcp-nagios-crunchtools" \
       version="0.1.0" \
@@ -20,9 +13,10 @@ LABEL name="mcp-nagios-crunchtools" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
 WORKDIR /app
-COPY --from=builder /usr/lib/python3*/site-packages/ /usr/lib/python3.12/site-packages/
-COPY --from=builder /usr/lib64/python3*/site-packages/ /usr/lib64/python3.12/site-packages/
-COPY --from=builder /app/src/ ./src/
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+RUN pip install --no-cache-dir .
+RUN python -c "from mcp_nagios_crunchtools import main; print('Installation verified')"
 
 EXPOSE 8026
 ENTRYPOINT ["python", "-m", "mcp_nagios_crunchtools"]
