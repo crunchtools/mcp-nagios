@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitLab API Documentation
+    url: https://docs.gitlab.com/api/rest/
+    about: Check the GitLab REST API docs for endpoint behavior questions

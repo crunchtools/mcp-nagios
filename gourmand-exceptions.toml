@@ -1,0 +1,34 @@
+[[exceptions]]
+check = "summary_litter"
+path = "CLAUDE.md"
+justification = "Claude Code project instructions for AI assistant orientation"
+
+[[exceptions]]
+check = "lint_suppression"
+path = "tests/test_validation.py"
+justification = "type: ignore[call-arg] is required to test that Pydantic rejects extra fields"
+
+[[exceptions]]
+check = "primitive_obsession"
+path = "src/mcp_nagios_crunchtools/client.py"
+justification = "HTTP status codes and Nagios CGI status codes are standard well-known constants"
+
+[[exceptions]]
+check = "primitive_obsession"
+path = "src/mcp_nagios_crunchtools/config.py"
+justification = "Port 8026 is the assigned MCP server port"
+
+[[exceptions]]
+check = "primitive_obsession"
+path = "src/mcp_nagios_crunchtools/__init__.py"
+justification = "Port 8026 is the assigned MCP server port"
+
+[[exceptions]]
+check = "implicit_state_machine"
+path = "src/mcp_nagios_crunchtools/tools/commands.py"
+justification = "Host vs service branching is a simple if-guard, not a state machine"
+
+[[exceptions]]
+check = "implicit_state_machine"
+path = "src/mcp_nagios_crunchtools/client.py"
+justification = "Error handling dispatches on HTTP status codes — standard pattern"

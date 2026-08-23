@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.crunchtools/nagios",
+  "title": "MCP Nagios",
+  "description": "Secure MCP server for Nagios Core monitoring — query status, acknowledge problems, manage checks",
+  "repository": {
+    "url": "https://github.com/crunchtools/mcp-nagios",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "mcp-nagios-crunchtools",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
