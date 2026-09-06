@@ -32,3 +32,8 @@ justification = "Host vs service branching is a simple if-guard, not a state mac
 check = "implicit_state_machine"
 path = "src/mcp_nagios_crunchtools/client.py"
 justification = "Error handling dispatches on HTTP status codes — standard pattern"
+
+[[exceptions]]
+check = "copy_paste_detection"
+path = "src/mcp_nagios_crunchtools/client.py"
+justification = "get_client and get_config are both the four-line lazy-singleton accessor: check the module global, construct if None, return. The duplication is the idiom; hiding it behind a generic obscures which global is being initialised."

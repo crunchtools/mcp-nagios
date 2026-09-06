@@ -1,5 +1,7 @@
 """Tests for Nagios MCP server tools."""
 
+from typing import Any
+
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
     acknowledge,
@@ -16,7 +18,7 @@ from .conftest import _mock_response, _patch_client
 TOOL_COUNT = 7
 
 
-def _success_result(data: dict) -> dict:  # type: ignore[type-arg]
+def _success_result(data: dict[str, Any]) -> dict[str, Any]:
     return {
         "format_version": 0,
         "result": {"type_code": 0, "type_text": "Success", "message": ""},
