@@ -40,6 +40,16 @@ jobs:
           NAGIOS_USER: "test_user"
           NAGIOS_PASS: "test_pass"
 
+  gourmand:
+    name: Code Quality (Gourmand)
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/crunchtools/gourmand:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Gourmand
+        run: gourmand --full .
+
   build-container:
     runs-on: ubuntu-latest
     steps:
