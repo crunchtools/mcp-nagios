@@ -22,17 +22,6 @@ def _reset_client_singleton() -> Iterator[None]:
     config_mod._config = None
 
 
-def _mock_config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.url = "https://nagios.example.com"
-    cfg.username = "admin"
-    cfg.password = "secret"
-    cfg.status_cgi_url = "https://nagios.example.com/nagios/cgi-bin/statusjson.cgi"
-    cfg.archive_cgi_url = "https://nagios.example.com/nagios/cgi-bin/archivejson.cgi"
-    cfg.cmd_cgi_url = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
-    return cfg
-
-
 def _mock_response(
     status_code: int = 200,
     json_data: dict[str, Any] | None = None,
@@ -57,7 +46,13 @@ def _mock_response(
 @contextmanager
 def _patch_client(response: httpx.Response) -> Iterator[None]:
     """Patch the Nagios client to return a mock response."""
-    cfg = _mock_config()
+    cfg = MagicMock()
+    cfg.url = "https://nagios.example.com"
+    cfg.username = "admin"
+    cfg.password = "secret"
+    cfg.status_cgi_url = "https://nagios.example.com/nagios/cgi-bin/statusjson.cgi"
+    cfg.archive_cgi_url = "https://nagios.example.com/nagios/cgi-bin/archivejson.cgi"
+    cfg.cmd_cgi_url = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
     with patch.object(config_mod, "get_config", return_value=cfg):
         mock_http = AsyncMock(spec=httpx.AsyncClient)
         mock_http.get = AsyncMock(return_value=response)
