@@ -1,6 +1,8 @@
 """Nagios status query tools."""
 
 from ..client import (
+    HOST_NON_PROBLEM_STATES,
+    SERVICE_NON_PROBLEM_STATES,
     STATE_TYPE_MAP,
     STATUS_MAP_HOST,
     STATUS_MAP_SERVICE,
@@ -67,7 +69,7 @@ async def current_problems() -> str:
     down_hosts = [
         (name, STATUS_MAP_HOST.get(code, f"UNKNOWN({code})"))
         for name, code in hosts.items()
-        if code != 2
+        if code not in HOST_NON_PROBLEM_STATES
     ]
 
     svc_data = await client.query_status({"query": "servicelist"})
@@ -75,7 +77,7 @@ async def current_problems() -> str:
     problem_services = []
     for hostname, svcs in services.items():
         for svc_name, code in svcs.items():
-            if code != 2:
+            if code not in SERVICE_NON_PROBLEM_STATES:
                 status_text = STATUS_MAP_SERVICE.get(code, f"UNKNOWN({code})")
                 problem_services.append((hostname, svc_name, status_text))
 

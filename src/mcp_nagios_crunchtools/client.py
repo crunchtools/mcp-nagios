@@ -105,6 +105,15 @@ def _format_timestamp(epoch_ms: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(epoch_ms / 1000))
 
 
-STATUS_MAP_HOST = {0: "PENDING", 2: "UP", 4: "DOWN", 8: "UNREACHABLE"}
-STATUS_MAP_SERVICE = {0: "PENDING", 2: "OK", 4: "WARNING", 8: "UNKNOWN", 16: "CRITICAL"}
+# Bitmask values used by statusjson.cgi. PENDING is 1, not 0 -- a service that
+# has never been checked returns 1, which previously fell through the map and
+# was rendered as the literal "UNKNOWN(1)".
+STATUS_MAP_HOST = {1: "PENDING", 2: "UP", 4: "DOWN", 8: "UNREACHABLE"}
+STATUS_MAP_SERVICE = {1: "PENDING", 2: "OK", 4: "WARNING", 8: "UNKNOWN", 16: "CRITICAL"}
 STATE_TYPE_MAP = {0: "SOFT", 1: "HARD"}
+
+# States that are not problems: a host that is UP / service that is OK, and
+# anything still PENDING (scheduled but not yet checked -- normal after a
+# Nagios restart, or for a service whose check_period has not opened yet).
+HOST_NON_PROBLEM_STATES = frozenset({1, 2})
+SERVICE_NON_PROBLEM_STATES = frozenset({1, 2})
