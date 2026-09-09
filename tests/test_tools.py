@@ -87,6 +87,89 @@ class TestStatusTools:
             result = await current_problems()
         assert "DOWN" in result
 
+    async def test_pending_host_is_not_a_problem(self) -> None:
+        """statusjson.cgi returns 1 for a host that has never been checked."""
+        host_resp = _mock_response(
+            json_data=_success_result({"hostlist": {"lotor": 1}}),
+        )
+        with _patch_client(host_resp):
+            result = await current_problems()
+        assert "No current problems" in result
+        assert "UNKNOWN(1)" not in result
+
+    async def test_pending_service_is_not_a_problem(self) -> None:
+        """A service outside its check_period is PENDING (1), not a problem.
+
+        Regression: PENDING was mapped to 0, so a real code of 1 fell through
+        to "UNKNOWN(1)" and every not-yet-checked service was reported as an
+        outage -- notably after any Nagios restart.
+        """
+        host_resp = _mock_response(
+            json_data=_success_result({"hostlist": {"lotor": 2}}),
+        )
+        svc_resp = _mock_response(
+            json_data=_success_result(
+                {
+                    "servicelist": {
+                        "ctr-rootsofthevalley.org": {
+                            "Train tracker": 1,
+                            "Water taxi tracker": 1,
+                            "HTTPS": 2,
+                        }
+                    }
+                }
+            ),
+        )
+        with _patch_client(host_resp, svc_resp):
+            result = await current_problems()
+        assert "No current problems" in result
+        assert "Train tracker" not in result
+        assert "UNKNOWN(1)" not in result
+
+    async def test_real_problems_still_reported_alongside_pending(self) -> None:
+        host_resp = _mock_response(
+            json_data=_success_result({"hostlist": {"lotor": 2}}),
+        )
+        svc_resp = _mock_response(
+            json_data=_success_result(
+                {
+                    "servicelist": {
+                        "ctr-rootsofthevalley.org": {
+                            "Train tracker": 1,
+                            "HTTPS external": 16,
+                            "Container memory": 4,
+                        }
+                    }
+                }
+            ),
+        )
+        with _patch_client(host_resp, svc_resp):
+            result = await current_problems()
+        assert "CRITICAL" in result
+        assert "WARNING" in result
+        assert "Train tracker" not in result
+        assert "1 service(s)" not in result
+        assert "2 service(s)" in result
+
+    async def test_pending_renders_as_pending_in_service_status(self) -> None:
+        response = _mock_response(
+            json_data=_success_result(
+                {
+                    "service": {
+                        "host_name": "ctr-rootsofthevalley.org",
+                        "description": "Train tracker",
+                        "status": 1,
+                        "state_type": 1,
+                        "plugin_output": "",
+                    }
+                }
+            ),
+        )
+        with _patch_client(response):
+            result = await service_status("ctr-rootsofthevalley.org", "Train tracker")
+        assert "PENDING" in result
+        assert "UNKNOWN(1)" not in result
+
 
 class TestCommandTools:
     async def test_acknowledge_service(self) -> None:

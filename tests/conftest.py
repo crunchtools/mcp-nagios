@@ -44,8 +44,15 @@ def _mock_response(
 
 
 @contextmanager
-def _patch_client(response: httpx.Response) -> Iterator[None]:
-    """Patch the Nagios client to return a mock response."""
+def _patch_client(*responses: httpx.Response) -> Iterator[None]:
+    """Patch the Nagios client to return one or more mock responses.
+
+    A single response is reused for every call. Several are returned in order,
+    which lets tools that make more than one request (current_problems fetches
+    the host list, then the service list) be tested properly.
+    """
+    if not responses:
+        raise ValueError("_patch_client requires at least one response")
     cfg = MagicMock()
     cfg.url = "https://nagios.example.com"
     cfg.username = "admin"
@@ -55,8 +62,12 @@ def _patch_client(response: httpx.Response) -> Iterator[None]:
     cfg.cmd_cgi_url = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
     with patch.object(config_mod, "get_config", return_value=cfg):
         mock_http = AsyncMock(spec=httpx.AsyncClient)
-        mock_http.get = AsyncMock(return_value=response)
-        mock_http.post = AsyncMock(return_value=response)
+        if len(responses) == 1:
+            mock_http.get = AsyncMock(return_value=responses[0])
+            mock_http.post = AsyncMock(return_value=responses[0])
+        else:
+            mock_http.get = AsyncMock(side_effect=list(responses))
+            mock_http.post = AsyncMock(side_effect=list(responses))
         mock_http.aclose = AsyncMock()
 
         nagios_client = client_mod.NagiosClient(cfg)
