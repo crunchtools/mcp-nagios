@@ -78,7 +78,12 @@ async def schedule_check(
 ) -> str:
     """Schedule a forced immediate re-check of a host or service."""
     client = get_client()
-    now = time.strftime("%m-%d-%Y %H:%M:%S", time.gmtime())
+    # cmd.cgi parses start_time as naive wall-clock in the Nagios server's own
+    # local timezone -- there is no offset field to send. gmtime() therefore
+    # scheduled every forced check UTC-offset hours into the future (4h against
+    # an EDT server), so "check now" silently did nothing. This container must
+    # run in the same timezone as the Nagios server for localtime() to match.
+    now = time.strftime("%m-%d-%Y %H:%M:%S", time.localtime())
 
     if service_description:
         form_data = {

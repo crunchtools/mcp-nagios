@@ -1,6 +1,11 @@
 """Tests for Nagios MCP server tools."""
 
+import os
+import time
 from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
@@ -12,6 +17,7 @@ from mcp_nagios_crunchtools.tools import (
     schedule_check,
     service_status,
 )
+from mcp_nagios_crunchtools.tools import commands as commands_mod
 
 from .conftest import _mock_response, _patch_client
 
@@ -195,6 +201,43 @@ class TestCommandTools:
         with _patch_client(response):
             result = await schedule_check("lotor", "HTTPS crunchtools.com")
         assert "Forced check scheduled" in result
+
+    @pytest.mark.parametrize("service", [None, "HTTPS crunchtools.com"])
+    async def test_schedule_check_sends_local_wall_clock(self, service: str | None) -> None:
+        """Regression: start_time must be local wall-clock, never UTC.
+
+        cmd.cgi has no timezone field -- it parses start_time in the Nagios
+        server's own zone. Sending gmtime() scheduled every forced check
+        UTC-offset hours into the future (4h against an EDT server), so
+        "check now" silently did nothing until that time rolled around.
+        """
+        captured: dict[str, str] = {}
+
+        async def _capture(_cmd_typ: int, form_data: dict[str, str]) -> str:
+            captured.update(form_data)
+            return "Your command was successfully submitted"
+
+        client = MagicMock()
+        client.submit_command = _capture
+
+        original_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        try:
+            with patch.object(commands_mod, "get_client", return_value=client):
+                await schedule_check("lotor", service)
+            local = time.strftime("%m-%d-%Y %H:%M:%S", time.localtime())
+            utc = time.strftime("%m-%d-%Y %H:%M:%S", time.gmtime())
+        finally:
+            if original_tz is None:
+                del os.environ["TZ"]
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+        # Compare to the minute so a second ticking over mid-test cannot flake.
+        assert captured["start_time"][:16] == local[:16]
+        assert captured["start_time"][:16] != utc[:16]
 
 
 class TestHistoryTools:
