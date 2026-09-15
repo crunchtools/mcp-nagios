@@ -1,6 +1,6 @@
 [project]
 name = "mcp-nagios-crunchtools"
-version = "0.1.2"
+version = "0.2.0"
 description = "Secure MCP server for Nagios Core monitoring — query status, acknowledge problems, manage checks"
 requires-python = ">=3.10"
 license = "AGPL-3.0-or-later"
