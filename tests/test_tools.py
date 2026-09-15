@@ -5,6 +5,7 @@ import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from mcp_nagios_crunchtools.server import mcp
@@ -14,6 +15,7 @@ from mcp_nagios_crunchtools.tools import (
     current_problems,
     host_status,
     notification_history,
+    program_status,
     schedule_check,
     service_status,
 )
@@ -21,7 +23,7 @@ from mcp_nagios_crunchtools.tools import commands as commands_mod
 
 from .conftest import _mock_response, _patch_client
 
-TOOL_COUNT = 7
+TOOL_COUNT = 8
 
 
 def _success_result(data: dict[str, Any]) -> dict[str, Any]:
@@ -175,6 +177,157 @@ class TestStatusTools:
             result = await service_status("ctr-rootsofthevalley.org", "Train tracker")
         assert "PENDING" in result
         assert "UNKNOWN(1)" not in result
+
+
+def _programstatus_response(
+    query_time_ms: int = 1_789_487_149_000,
+    last_data_update_ms: int = 1_789_487_147_000,
+    **overrides: Any,
+) -> httpx.Response:
+    """Build a statusjson.cgi programstatus reply.
+
+    query_time / last_data_update live in the `result` block, not `data` --
+    that pair is what freshness is measured from.
+    """
+    prog: dict[str, Any] = {
+        "version": "4.5.9",
+        "nagios_pid": 46,
+        "daemon_mode": True,
+        "program_start": 1_789_464_008_000,
+        "enable_notifications": True,
+        "execute_service_checks": True,
+        "accept_passive_service_checks": True,
+        "execute_host_checks": True,
+        "accept_passive_host_checks": True,
+        "enable_event_handlers": True,
+        "enable_flap_detection": True,
+    }
+    prog.update(overrides)
+    result: dict[str, Any] = {"type_code": 0, "type_text": "Success", "message": ""}
+    if query_time_ms:
+        result["query_time"] = query_time_ms
+    if last_data_update_ms:
+        result["last_data_update"] = last_data_update_ms
+    return _mock_response(
+        json_data={
+            "format_version": 0,
+            "result": result,
+            "data": {"programstatus": prog},
+        },
+    )
+
+
+class TestProgramStatus:
+    """The monitoring system's own health -- distinct from what it monitors."""
+
+    async def test_healthy_daemon(self) -> None:
+        with _patch_client(_programstatus_response()):
+            result = await program_status()
+        assert result.startswith("NAGIOS HEALTH: OK")
+        assert "DEGRADED" not in result
+        assert "4.5.9" in result
+
+    async def test_wedged_daemon_is_degraded(self) -> None:
+        """CGI answers 200 but status data has stopped advancing.
+
+        This is the failure current_problems cannot see: it would cheerfully
+        return "no problems" from data frozen hours ago.
+        """
+        response = _programstatus_response(
+            query_time_ms=1_789_487_149_000,
+            last_data_update_ms=1_789_486_549_000,  # 600s earlier
+        )
+        with _patch_client(response):
+            result = await program_status()
+        assert result.startswith("NAGIOS HEALTH: DEGRADED")
+        assert "600s stale" in result
+        assert "wedged" in result
+
+    async def test_staleness_threshold_is_configurable(self) -> None:
+        response = _programstatus_response(
+            query_time_ms=1_789_487_149_000,
+            last_data_update_ms=1_789_487_029_000,  # 120s earlier
+        )
+        with _patch_client(response):
+            lenient = await program_status(max_staleness_seconds=300)
+        with _patch_client(response):
+            strict = await program_status(max_staleness_seconds=60)
+        assert lenient.startswith("NAGIOS HEALTH: OK")
+        assert strict.startswith("NAGIOS HEALTH: DEGRADED")
+
+    async def test_notifications_globally_disabled_is_degraded(self) -> None:
+        """Nagios up, checking, and telling nobody -- the quietest failure."""
+        with _patch_client(_programstatus_response(enable_notifications=False)):
+            result = await program_status()
+        assert result.startswith("NAGIOS HEALTH: DEGRADED")
+        assert "alerting nobody" in result
+
+    @pytest.mark.parametrize(
+        ("flag", "expected"),
+        [
+            ("execute_host_checks", "Active host checks are DISABLED"),
+            ("execute_service_checks", "Active service checks are DISABLED"),
+        ],
+    )
+    async def test_disabled_check_execution_is_degraded(self, flag: str, expected: str) -> None:
+        with _patch_client(_programstatus_response(**{flag: False})):
+            result = await program_status()
+        assert result.startswith("NAGIOS HEALTH: DEGRADED")
+        assert expected in result
+
+    async def test_missing_flags_do_not_false_alarm(self) -> None:
+        """A key Nagios never sent is not evidence of a problem.
+
+        A health check that cries wolf gets ignored, and an ignored health
+        check is worse than none.
+        """
+        prog = {"version": "4.5.9", "nagios_pid": 46}
+        response = _mock_response(
+            json_data={
+                "format_version": 0,
+                "result": {
+                    "type_code": 0,
+                    "type_text": "Success",
+                    "message": "",
+                    "query_time": 1_789_487_149_000,
+                    "last_data_update": 1_789_487_147_000,
+                },
+                "data": {"programstatus": prog},
+            },
+        )
+        with _patch_client(response):
+            result = await program_status()
+        assert result.startswith("NAGIOS HEALTH: OK")
+
+    async def test_missing_timestamps_are_degraded_not_ok(self) -> None:
+        """Unverifiable freshness must never be reported as healthy."""
+        with _patch_client(_programstatus_response(query_time_ms=0, last_data_update_ms=0)):
+            result = await program_status()
+        assert result.startswith("NAGIOS HEALTH: DEGRADED")
+        assert "freshness cannot be verified" in result
+
+    async def test_staleness_ignores_local_clock(self) -> None:
+        """Regression guard tied to the 0.1.2 timezone bug.
+
+        Freshness is derived from two timestamps Nagios itself produced, so a
+        container running in the wrong timezone -- or with a skewed clock --
+        cannot turn a healthy daemon into a fake alarm.
+        """
+        response = _programstatus_response()
+        original_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Pacific/Kiritimati"  # UTC+14
+        time.tzset()
+        try:
+            with _patch_client(response):
+                result = await program_status()
+        finally:
+            if original_tz is None:
+                del os.environ["TZ"]
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+        assert result.startswith("NAGIOS HEALTH: OK")
+        assert "Status Data Age: 2s" in result
 
 
 class TestCommandTools:

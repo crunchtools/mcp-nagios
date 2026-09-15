@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
 
+from . import __version__
 from .client import close_client
 from .tools import (
     acknowledge,
@@ -13,6 +14,7 @@ from .tools import (
     current_problems,
     host_status,
     notification_history,
+    program_status,
     schedule_check,
     service_status,
 )
@@ -30,12 +32,16 @@ async def lifespan(_mcp: FastMCP) -> AsyncIterator[None]:
 
 mcp = FastMCP(
     name="mcp-nagios-crunchtools",
-    version="0.1.0",
+    # Sourced from __version__ rather than hardcoded: this literal silently
+    # drifted to 0.1.0 while the package moved on to 0.1.2.
+    version=__version__,
     lifespan=lifespan,
     instructions=(
         "MCP server for Nagios Core monitoring. Query host and service status, "
         "acknowledge problems, add comments, schedule forced checks, and "
-        "read notification history."
+        "read notification history. To check whether Nagios ITSELF is alive and "
+        "functioning -- as opposed to what it is reporting about other hosts -- "
+        "use nagios_program_status_tool, not nagios_current_problems_tool."
     ),
 )
 
@@ -75,6 +81,32 @@ async def nagios_current_problems_tool() -> str:
         Summary of all current problems, or confirmation that everything is OK.
     """
     return await current_problems()
+
+
+@mcp.tool()
+async def nagios_program_status_tool(max_staleness_seconds: int = 60) -> str:
+    """Check whether the Nagios daemon itself is alive and actually working.
+
+    Use this to verify the monitoring system, NOT to find outages. It is the
+    right tool for a watchdog asking "is Nagios still able to tell me about
+    problems?" -- nagios_current_problems_tool answers a different question and
+    returns "no problems" both when all is well and when Nagios has silently
+    stopped working.
+
+    Detects a wedged daemon (CGI still returns 200 but status data is stale),
+    globally disabled notifications (monitoring everything, alerting nobody),
+    and disabled check execution. Raises on connection failure, so a dead
+    Nagios can never be read as healthy.
+
+    Args:
+        max_staleness_seconds: How old Nagios's status data may be before the
+            daemon is considered wedged. Default 60 (it refreshes every ~10s).
+
+    Returns:
+        'NAGIOS HEALTH: OK' or 'NAGIOS HEALTH: DEGRADED' on the first line,
+        followed by any problems found and the daemon's operating flags.
+    """
+    return await program_status(max_staleness_seconds)
 
 
 @mcp.tool()
