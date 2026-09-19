@@ -49,7 +49,7 @@ jobs:
         run: docker build -f Containerfile -t mcp-nagios:scan .
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "mcp-nagios:scan"
           format: "sarif"
