@@ -13,8 +13,13 @@ RUN pip install --no-cache-dir .
 # Stage 2: Runtime (distroless -- no shell, no package manager)
 FROM quay.io/hummingbird/python:latest
 
+# version MUST track pyproject.toml. It is a fourth copy of the version string
+# that check_version_sync() does not look at (it checks pyproject.toml,
+# __init__.py and server.py), so it drifts silently -- it sat at 0.1.0 through
+# the 0.1.2 and 0.2.0 releases, which made a correctly-updated running
+# container look three versions stale on inspection.
 LABEL name="mcp-nagios-crunchtools" \
-      version="0.1.0" \
+      version="0.2.0" \
       summary="Secure MCP server for Nagios Core monitoring" \
       description="Query status, acknowledge problems, add comments, schedule checks" \
       maintainer="crunchtools.com" \
