@@ -22,8 +22,8 @@ DEFAULT_MAX_STALENESS_SECONDS = 60
 async def host_status(host_name: str) -> str:
     """Query the status of a specific host."""
     client = get_client()
-    data = await client.query_status({"query": "host", "hostname": host_name})
-    host = data["data"]["host"]
+    host_response = await client.query_status({"query": "host", "hostname": host_name})
+    host = host_response["data"]["host"]
 
     status_code = host.get("status", 0)
     status_text = STATUS_MAP_HOST.get(status_code, f"UNKNOWN({status_code})")
@@ -44,12 +44,12 @@ async def host_status(host_name: str) -> str:
 async def service_status(host_name: str, service_description: str) -> str:
     """Query the status of a specific service on a host."""
     client = get_client()
-    data = await client.query_status({
+    service_response = await client.query_status({
         "query": "service",
         "hostname": host_name,
         "servicedescription": service_description,
     })
-    svc = data["data"]["service"]
+    svc = service_response["data"]["service"]
 
     status_code = svc.get("status", 0)
     status_text = STATUS_MAP_SERVICE.get(status_code, f"UNKNOWN({status_code})")
@@ -136,9 +136,9 @@ async def program_status(max_staleness_seconds: int = DEFAULT_MAX_STALENESS_SECO
     dead Nagios surfaces as an error and can never be mistaken for healthy.
     """
     client = get_client()
-    data = await client.query_status({"query": "programstatus"})
-    prog = data["data"]["programstatus"]
-    result = data.get("result", {})
+    program_response = await client.query_status({"query": "programstatus"})
+    prog = program_response["data"]["programstatus"]
+    result = program_response.get("result", {})
 
     # Both timestamps come from Nagios itself, so staleness is immune to clock
     # skew between this container and the Nagios server -- the same class of bug

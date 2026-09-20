@@ -3,6 +3,7 @@
 import time
 
 from ..client import get_client
+from ..models import AcknowledgeInput, CommentInput, ScheduleCheckInput
 
 CMD_ACKNOWLEDGE_SERVICE = 34
 CMD_ACKNOWLEDGE_HOST = 33
@@ -20,28 +21,38 @@ async def acknowledge(
     notify: bool = True,
 ) -> str:
     """Acknowledge a host or service problem."""
+    params = AcknowledgeInput(
+        host_name=host_name,
+        comment=comment,
+        service_description=service_description,
+        sticky=sticky,
+        notify=notify,
+    )
     client = get_client()
 
-    if service_description:
+    if params.service_description:
         form_data = {
-            "host": host_name,
-            "service": service_description,
+            "host": params.host_name,
+            "service": params.service_description,
             "com_author": "Hermes",
-            "com_data": comment,
-            "sticky_ack": "on" if sticky else "",
-            "send_notification": "on" if notify else "",
+            "com_data": params.comment,
+            "sticky_ack": "on" if params.sticky else "",
+            "send_notification": "on" if params.notify else "",
         }
         result = await client.submit_command(CMD_ACKNOWLEDGE_SERVICE, form_data)
-        return f"Acknowledged service '{service_description}' on '{host_name}': {result}"
+        return (
+            f"Acknowledged service '{params.service_description}' "
+            f"on '{params.host_name}': {result}"
+        )
     form_data = {
-        "host": host_name,
+        "host": params.host_name,
         "com_author": "Hermes",
-        "com_data": comment,
-        "sticky_ack": "on" if sticky else "",
-        "send_notification": "on" if notify else "",
+        "com_data": params.comment,
+        "sticky_ack": "on" if params.sticky else "",
+        "send_notification": "on" if params.notify else "",
     }
     result = await client.submit_command(CMD_ACKNOWLEDGE_HOST, form_data)
-    return f"Acknowledged host '{host_name}': {result}"
+    return f"Acknowledged host '{params.host_name}': {result}"
 
 
 async def add_comment(
@@ -50,26 +61,34 @@ async def add_comment(
     service_description: str | None = None,
 ) -> str:
     """Add a comment to a host or service."""
+    params = CommentInput(
+        host_name=host_name,
+        comment=comment,
+        service_description=service_description,
+    )
     client = get_client()
 
-    if service_description:
+    if params.service_description:
         form_data = {
-            "host": host_name,
-            "service": service_description,
+            "host": params.host_name,
+            "service": params.service_description,
             "com_author": "Hermes",
-            "com_data": comment,
+            "com_data": params.comment,
             "persistent": "on",
         }
         result = await client.submit_command(CMD_ADD_SERVICE_COMMENT, form_data)
-        return f"Comment added to service '{service_description}' on '{host_name}': {result}"
+        return (
+            f"Comment added to service '{params.service_description}' "
+            f"on '{params.host_name}': {result}"
+        )
     form_data = {
-        "host": host_name,
+        "host": params.host_name,
         "com_author": "Hermes",
-        "com_data": comment,
+        "com_data": params.comment,
         "persistent": "on",
     }
     result = await client.submit_command(CMD_ADD_HOST_COMMENT, form_data)
-    return f"Comment added to host '{host_name}': {result}"
+    return f"Comment added to host '{params.host_name}': {result}"
 
 
 async def schedule_check(
@@ -77,6 +96,10 @@ async def schedule_check(
     service_description: str | None = None,
 ) -> str:
     """Schedule a forced immediate re-check of a host or service."""
+    params = ScheduleCheckInput(
+        host_name=host_name,
+        service_description=service_description,
+    )
     client = get_client()
     # cmd.cgi parses start_time as naive wall-clock in the Nagios server's own
     # local timezone -- there is no offset field to send. gmtime() therefore
@@ -85,19 +108,22 @@ async def schedule_check(
     # run in the same timezone as the Nagios server for localtime() to match.
     now = time.strftime("%m-%d-%Y %H:%M:%S", time.localtime())
 
-    if service_description:
+    if params.service_description:
         form_data = {
-            "host": host_name,
-            "service": service_description,
+            "host": params.host_name,
+            "service": params.service_description,
             "start_time": now,
             "force_check": "on",
         }
         result = await client.submit_command(CMD_SCHEDULE_FORCED_SERVICE_CHECK, form_data)
-        return f"Forced check scheduled for '{service_description}' on '{host_name}': {result}"
+        return (
+            f"Forced check scheduled for '{params.service_description}' "
+            f"on '{params.host_name}': {result}"
+        )
     form_data = {
-        "host": host_name,
+        "host": params.host_name,
         "start_time": now,
         "force_check": "on",
     }
     result = await client.submit_command(CMD_SCHEDULE_FORCED_HOST_CHECK, form_data)
-    return f"Forced check scheduled for host '{host_name}': {result}"
+    return f"Forced check scheduled for host '{params.host_name}': {result}"

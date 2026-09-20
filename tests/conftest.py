@@ -1,5 +1,6 @@
 """Test fixtures for Nagios MCP server."""
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -27,10 +28,8 @@ def _mock_response(
     json_data: dict[str, Any] | None = None,
     text: str = "",
 ) -> httpx.Response:
-    import json as json_mod
-
     if json_data is not None:
-        content = json_mod.dumps(json_data).encode()
+        content = json.dumps(json_data).encode()
         headers = {"content-type": "application/json"}
     else:
         content = text.encode()
