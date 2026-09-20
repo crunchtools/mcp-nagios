@@ -1,12 +1,12 @@
 # mcp-nagios-crunchtools
 
-MCP server for Nagios Core monitoring on lotor. Part of RT #1459 (Zabbix-to-Nagios migration).
+MCP server for Nagios Core monitoring. Part of RT #1459 (Zabbix-to-Nagios migration).
 
 ## Quick Start
 
 ```bash
 uv sync --all-extras
-NAGIOS_URL=https://nagios.crunchtools.com NAGIOS_USER=admin NAGIOS_PASS=secret uv run mcp-nagios-crunchtools
+NAGIOS_URL=https://nagios.example.com NAGIOS_USER=admin NAGIOS_PASS=secret uv run mcp-nagios-crunchtools
 ```
 
 ## Environment Variables
@@ -15,12 +15,13 @@ NAGIOS_URL=https://nagios.crunchtools.com NAGIOS_USER=admin NAGIOS_PASS=secret u
 - `NAGIOS_USER` (required) — HTTP Basic Auth username
 - `NAGIOS_PASS` (required) — HTTP Basic Auth password
 
-## Tools (7)
+## Tools (8)
 
 ### Status
 - `nagios_host_status` — query host status
 - `nagios_service_status` — query service status
 - `nagios_current_problems` — all non-OK hosts/services
+- `nagios_program_status` — health check on the monitoring path itself (wedged daemon, disabled notifications, stale status), separate from the state of monitored hosts/services
 
 ### Commands
 - `nagios_acknowledge` — acknowledge a problem
