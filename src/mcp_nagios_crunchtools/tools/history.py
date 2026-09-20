@@ -18,8 +18,8 @@ async def notification_history(
     if host_name:
         params["hostname"] = host_name
 
-    data = await client.query_archive(params)
-    notifications = data["data"].get("notificationlist", [])
+    archive = await client.query_archive(params)
+    notifications = archive["data"].get("notificationlist", [])
 
     if not notifications:
         scope = f" for host '{host_name}'" if host_name else ""

@@ -1,6 +1,7 @@
 """Nagios CGI JSON API client."""
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -10,6 +11,8 @@ from .config import Config, get_config
 from .errors import NagiosApiError, NagiosQueryError
 
 logger = logging.getLogger(__name__)
+
+HTTP_OK = 200
 
 
 class NagiosClient:
@@ -37,25 +40,25 @@ class NagiosClient:
         """Query the statusjson.cgi endpoint."""
         client = await self._get_client()
         response = await client.get(self._config.status_cgi_url, params=params)
-        if response.status_code != 200:
+        if response.status_code != HTTP_OK:
             raise NagiosApiError(response.status_code, response.text[:200])
-        data: dict[str, Any] = response.json()
-        result = data.get("result", {})
+        envelope: dict[str, Any] = response.json()
+        result = envelope.get("result", {})
         if result.get("type_code", -1) != 0:
             raise NagiosQueryError(result.get("message", "Unknown error"))
-        return data
+        return envelope
 
     async def query_archive(self, params: dict[str, str]) -> dict[str, Any]:
         """Query the archivejson.cgi endpoint."""
         client = await self._get_client()
         response = await client.get(self._config.archive_cgi_url, params=params)
-        if response.status_code != 200:
+        if response.status_code != HTTP_OK:
             raise NagiosApiError(response.status_code, response.text[:200])
-        data: dict[str, Any] = response.json()
-        result = data.get("result", {})
+        envelope: dict[str, Any] = response.json()
+        result = envelope.get("result", {})
         if result.get("type_code", -1) != 0:
             raise NagiosQueryError(result.get("message", "Unknown error"))
-        return data
+        return envelope
 
     async def submit_command(self, cmd_typ: int, form_data: dict[str, str]) -> str:
         """Submit a command via cmd.cgi POST."""
@@ -67,17 +70,15 @@ class NagiosClient:
             **form_data,
         }
         response = await client.post(self._config.cmd_cgi_url, data=payload)
-        if response.status_code != 200:
+        if response.status_code != HTTP_OK:
             raise NagiosApiError(response.status_code, response.text[:200])
         body = response.text
         if "successfully submitted" in body.lower():
             return "Command submitted successfully"
         if "errorMessage" in body:
-            import re
-
             errors = re.findall(r"errorMessage'>([^<]+)", body)
             msg = "; ".join(errors) if errors else "Unknown command error"
-            raise NagiosApiError(200, msg)
+            raise NagiosApiError(HTTP_OK, msg)
         return "Command submitted"
 
 

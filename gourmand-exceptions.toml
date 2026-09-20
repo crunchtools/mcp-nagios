@@ -1,39 +1,80 @@
+# Gourmand Exceptions
+#
+# The two implicit_state_machine entries that used to live here were deleted:
+# that check's Python AST bug is fixed upstream and it now reports zero
+# violations against this repo, so the suppressions covered nothing.
+
 [[exceptions]]
 check = "summary_litter"
 path = "CLAUDE.md"
 justification = "Claude Code project instructions for AI assistant orientation"
+classification = "by_design"
 
 [[exceptions]]
 check = "lint_suppression"
 path = "tests/test_validation.py"
-justification = "type: ignore[call-arg] is required to test that Pydantic rejects extra fields"
+justification = "type: ignore[call-arg] is required to test that Pydantic rejects extra fields. The suppression is the assertion: without it mypy refuses to compile the call the test exists to prove is rejected at runtime."
+classification = "by_design"
 
 [[exceptions]]
 check = "primitive_obsession"
 path = "src/mcp_nagios_crunchtools/client.py"
-justification = "HTTP status codes and Nagios CGI status codes are standard well-known constants"
+justification = "Nagios CGI result type_codes are wire-protocol values defined by Nagios, not domain concepts this project gets to model. The one magic number that was genuinely ours, the bare 200, is now the named constant HTTP_OK."
+classification = "by_design"
 
 [[exceptions]]
 check = "primitive_obsession"
 path = "src/mcp_nagios_crunchtools/config.py"
-justification = "Port 8026 is the assigned MCP server port"
+justification = "Port 8026 is the assigned MCP server port for mcp-nagios, allocated fleet-wide. Wrapping an allocated port number in a type would obscure the one fact that matters about it."
+classification = "by_design"
 
 [[exceptions]]
 check = "primitive_obsession"
 path = "src/mcp_nagios_crunchtools/__init__.py"
-justification = "Port 8026 is the assigned MCP server port"
-
-[[exceptions]]
-check = "implicit_state_machine"
-path = "src/mcp_nagios_crunchtools/tools/commands.py"
-justification = "Host vs service branching is a simple if-guard, not a state machine"
-
-[[exceptions]]
-check = "implicit_state_machine"
-path = "src/mcp_nagios_crunchtools/client.py"
-justification = "Error handling dispatches on HTTP status codes — standard pattern"
+justification = "Port 8026 is the assigned MCP server port for mcp-nagios; this is the CLI default that mirrors the config default."
+classification = "by_design"
 
 [[exceptions]]
 check = "copy_paste_detection"
 path = "src/mcp_nagios_crunchtools/client.py"
 justification = "get_client and get_config are both the four-line lazy-singleton accessor: check the module global, construct if None, return. The duplication is the idiom; hiding it behind a generic obscures which global is being initialised."
+classification = "by_design"
+
+# Hidden env config — EV013 has no documentation-detection mechanism; it matches
+# names against a fixed allowlist and nothing else. These entries record that
+# each variable was reviewed and is documented, which is the outcome the check
+# exists to force.
+
+[[exceptions]]
+check = "hidden_env_config"
+path = "src/mcp_nagios_crunchtools/config.py"
+justification = "NAGIOS_URL, NAGIOS_USER and NAGIOS_PASS are the server's required connection settings, documented in README.md's Configuration table. Credentials cannot be passed on the CLI without landing in the process table and shell history, so the environment is the correct channel."
+classification = "by_design"
+
+[[exceptions]]
+check = "hidden_env_config"
+path = "src/mcp_nagios_crunchtools/errors.py"
+justification = "NAGIOS_PASS is named here only so error messages can redact it. Referencing the variable in order to keep its value out of logs is the opposite of a hidden toggle."
+classification = "by_design"
+
+[[exceptions]]
+check = "hidden_env_config"
+path = "tests/test_tools.py"
+justification = "These tests set TZ to exercise schedule_check's localtime() handling, which is the defect fixed in 0.1.2 where forced checks were scheduled UTC-offset hours late. TZ is a deployment requirement rather than a code toggle and is now documented in README.md, including why a mismatch fails silently; the occurrences flagged here are the tests that pin the behaviour."
+classification = "by_design"
+
+# Manifest lint suppression — audited rule by rule, not stamped.
+#
+# Every ignore was measured against this codebase by emptying the ignore list
+# and counting real hits. PIE790 and PLR0913 had zero hits anywhere and were
+# DELETED. PLR2004 (3 hits, all the bare 200 in client.py) was DELETED by naming
+# the constant HTTP_OK. S101 (52), S105 (1) and PLC0415 (4 of 5) are tests-only
+# and moved to per-file-ignores. PLW0603 (3) and RUF022 (1) are scoped to the
+# specific files that need them. Only two genuinely package-wide rules remain
+# global, which is why this stays by_design rather than accepted debt.
+
+[[exceptions]]
+check = "manifest_lint_suppression"
+path = "pyproject.toml"
+justification = "Two global ignores remain, both measured and both package-wide. TRY003 (4 hits) covers exception messages built at the raise site rather than inside the exception class, which is this project's convention for surfacing Nagios CGI errors. TID252 (13 hits) covers the package's own internal relative imports. The other eight entries were either deleted outright as dead (PIE790, PLR0913), fixed in code (PLR2004), or narrowed to per-file-ignores (S101, S105, PLC0415, PLW0603, RUF022)."
+classification = "by_design"

@@ -48,25 +48,31 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "S", "B", "C4", "C901", "DTZ", "T10", "ISC", "PIE", "PT", "RET", "SIM", "TID", "TCH", "ARG", "PLC", "PLE", "PLR", "PLW", "TRY", "RUF"]
+# Audited rule by rule against this codebase (RT #1482). Only rules whose
+# violations are genuinely package-wide stay global; everything else is scoped
+# to the files that need it below. PIE790 and PLR0913 were deleted outright --
+# zero hits anywhere. PLR2004 was deleted by naming the magic 200 as HTTP_OK.
 ignore = [
-    "S101",
-    "TRY003",
-    "PLR0913",
-    "PLR2004",
-    "PLW0603",
-    "PIE790",
-    "PLC0415",
-    "S105",
-    "TID252",
-    "RUF022",
+    "TRY003",   # 4 hits: exception messages constructed at the raise site
+    "TID252",   # 13 hits: this package's own internal relative imports
 ]
 
 [tool.ruff.lint.pylint]
 max-branches = 10
 max-statements = 50
 
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S105", "PLC0415", "PLR2004"]
+"tests/*" = ["S101", "S105", "PLC0415"]
+# main() imports .server lazily so `--help` does not load the MCP stack.
+"src/mcp_nagios_crunchtools/__init__.py" = ["PLC0415"]
+# Module-level lazy singletons for the client and config.
+"src/mcp_nagios_crunchtools/client.py" = ["PLW0603"]
+"src/mcp_nagios_crunchtools/config.py" = ["PLW0603"]
+# __all__ is grouped by tool category (status, commands, history), not sorted.
+"src/mcp_nagios_crunchtools/tools/__init__.py" = ["RUF022"]
 
 [tool.mypy]
 python_version = "3.10"

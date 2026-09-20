@@ -15,6 +15,20 @@ uvx mcp-nagios-crunchtools
 | `NAGIOS_URL` | Yes | Base URL (e.g., `https://nagios.crunchtools.com`) |
 | `NAGIOS_USER` | Yes | HTTP Basic Auth username |
 | `NAGIOS_PASS` | Yes | HTTP Basic Auth password |
+| `TZ` | Effectively yes | The container's local timezone. Must match the Nagios server's own timezone. |
+
+### Why `TZ` matters
+
+`schedule_check` submits a `start_time` to `cmd.cgi`, which parses it as naive
+wall-clock time in the Nagios server's local timezone — there is no offset field
+to send. The value is therefore built with `time.localtime()`, so this container
+must run in the same timezone as the Nagios server.
+
+When it does not, forced checks are silently scheduled into the future by the
+offset between the two — four hours against an EDT server — and "check now"
+appears to do nothing at all. No error is raised. This was a real defect, fixed
+in 0.1.2 by switching from `gmtime()` to `localtime()`; the timezone assumption
+it introduced is why `TZ` belongs in this table rather than being left implicit.
 
 ## Tools
 
