@@ -12,7 +12,7 @@ uvx mcp-nagios-crunchtools
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `NAGIOS_URL` | Yes | Base URL (e.g., `https://nagios.crunchtools.com`) |
+| `NAGIOS_URL` | Yes | Base URL (e.g., `https://nagios.example.com`) |
 | `NAGIOS_USER` | Yes | HTTP Basic Auth username |
 | `NAGIOS_PASS` | Yes | HTTP Basic Auth password |
 | `TZ` | Effectively yes | The container's local timezone. Must match the Nagios server's own timezone. |
@@ -37,6 +37,7 @@ it introduced is why `TZ` belongs in this table rather than being left implicit.
 | `nagios_host_status` | Query a single host's status |
 | `nagios_service_status` | Query a single service's status |
 | `nagios_current_problems` | All hosts/services not in OK state |
+| `nagios_program_status` | Health check on the monitoring path itself (wedged daemon, disabled notifications, stale status) -- not the same as no current problems |
 | `nagios_acknowledge` | Acknowledge a host or service problem |
 | `nagios_add_comment` | Add a comment to a host or service |
 | `nagios_schedule_check` | Force an immediate re-check |
