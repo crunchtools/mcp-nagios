@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Constitution is now a v1.18.0 manifest; constitution validation is pinned
+  through `constitution.yml`, and Dependabot auto-merges GitHub Actions
+  minor/patch updates.
+
 ## [0.2.0] - 2026-09-19
 
 ### Added
