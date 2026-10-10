@@ -2,12 +2,15 @@
 
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
+from mcp_nagios_crunchtools import client as client_mod
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
     acknowledge,
@@ -25,6 +28,99 @@ from .conftest import _mock_response, _patch_client
 
 TOOL_COUNT = 8
 
+READ_ONLY = frozenset(
+    {
+        "nagios_host_status_tool",
+        "nagios_service_status_tool",
+        "nagios_current_problems_tool",
+        "nagios_program_status_tool",
+        "nagios_notification_history_tool",
+    }
+)
+# Each of these submits a Nagios external command through cmd.cgi.
+WRITES = frozenset(
+    {
+        "nagios_acknowledge_tool",
+        "nagios_add_comment_tool",
+        "nagios_schedule_check_tool",
+    }
+)
+
+# Arguments that satisfy each read-only tool's required parameters.
+READ_ONLY_CALLS: dict[str, dict[str, Any]] = {
+    "nagios_host_status_tool": {"host_name": "web01"},
+    "nagios_service_status_tool": {"host_name": "web01", "service_description": "HTTPS"},
+    "nagios_current_problems_tool": {},
+    "nagios_program_status_tool": {},
+    "nagios_notification_history_tool": {"host_name": "web01", "hours": 1},
+}
+
+# One body that answers every statusjson.cgi / archivejson.cgi query the reads make.
+_ANY_QUERY_DATA: dict[str, Any] = {
+    "host": {"name": "web01"},
+    "service": {},
+    "hostlist": {},
+    "servicelist": {},
+    "programstatus": {},
+    "notificationlist": [],
+}
+
+
+@contextmanager
+def _recording_client() -> Iterator[list[httpx.Request]]:
+    """Run the real NagiosClient over a transport that records each request."""
+    seen: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "format_version": 0,
+                "result": {"type_code": 0, "type_text": "Success", "message": ""},
+                "data": _ANY_QUERY_DATA,
+            },
+        )
+
+    cfg = MagicMock()
+    cfg.status_cgi_url = "https://nagios.example.com/nagios/cgi-bin/statusjson.cgi"
+    cfg.archive_cgi_url = "https://nagios.example.com/nagios/cgi-bin/archivejson.cgi"
+    cfg.cmd_cgi_url = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
+    nagios_client = client_mod.NagiosClient(cfg)
+    nagios_client._client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    client_mod._client = nagios_client
+    yield seen
+
+
+class TestReadOnlyAnnotation:
+    """Every registered tool is classified, and the reads really only read."""
+
+    async def test_every_tool_is_classified(self) -> None:
+        tools = await mcp.list_tools()
+        assert READ_ONLY.isdisjoint(WRITES)
+        assert {tool.name for tool in tools} == READ_ONLY | WRITES
+        annotated = {
+            tool.name
+            for tool in tools
+            if tool.annotations is not None
+            and tool.annotations.model_dump(by_alias=True).get("readOnlyHint") is True
+        }
+        assert annotated == READ_ONLY
+
+    @pytest.mark.parametrize("name", sorted(READ_ONLY))
+    async def test_read_only_tool_only_sends_get(self, name: str) -> None:
+        """A read never reaches cmd.cgi, which is how Nagios takes a command.
+
+        cmd.cgi accepts a command over GET as well as POST, so the path is
+        checked along with the method.
+        """
+        with _recording_client() as seen:
+            await mcp.call_tool(name, READ_ONLY_CALLS[name])
+        assert seen
+        for request in seen:
+            assert request.method in {"GET", "HEAD"}
+            assert not request.url.path.endswith("/cmd.cgi")
+
 
 def _success_result(data: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -37,19 +133,21 @@ def _success_result(data: dict[str, Any]) -> dict[str, Any]:
 class TestStatusTools:
     async def test_host_status(self) -> None:
         response = _mock_response(
-            json_data=_success_result({
-                "host": {
-                    "name": "lotor",
-                    "status": 2,
-                    "state_type": 1,
-                    "plugin_output": "TCP OK",
-                    "last_check": 1700000000000,
-                    "next_check": 1700000300000,
-                    "current_attempt": 1,
-                    "max_attempts": 3,
-                    "last_state_change": 1699999000000,
-                },
-            }),
+            json_data=_success_result(
+                {
+                    "host": {
+                        "name": "lotor",
+                        "status": 2,
+                        "state_type": 1,
+                        "plugin_output": "TCP OK",
+                        "last_check": 1700000000000,
+                        "next_check": 1700000300000,
+                        "current_attempt": 1,
+                        "max_attempts": 3,
+                        "last_state_change": 1699999000000,
+                    },
+                }
+            ),
         )
         with _patch_client(response):
             result = await host_status("lotor")
@@ -59,20 +157,22 @@ class TestStatusTools:
 
     async def test_service_status(self) -> None:
         response = _mock_response(
-            json_data=_success_result({
-                "service": {
-                    "host_name": "lotor",
-                    "description": "HTTPS crunchtools.com",
-                    "status": 2,
-                    "state_type": 1,
-                    "plugin_output": "HTTP OK",
-                    "last_check": 1700000000000,
-                    "current_attempt": 1,
-                    "max_attempts": 1,
-                    "last_state_change": 1699999000000,
-                    "problem_has_been_acknowledged": False,
-                },
-            }),
+            json_data=_success_result(
+                {
+                    "service": {
+                        "host_name": "lotor",
+                        "description": "HTTPS crunchtools.com",
+                        "status": 2,
+                        "state_type": 1,
+                        "plugin_output": "HTTP OK",
+                        "last_check": 1700000000000,
+                        "current_attempt": 1,
+                        "max_attempts": 1,
+                        "last_state_change": 1699999000000,
+                        "problem_has_been_acknowledged": False,
+                    },
+                }
+            ),
         )
         with _patch_client(response):
             result = await service_status("lotor", "HTTPS crunchtools.com")
@@ -396,19 +496,21 @@ class TestCommandTools:
 class TestHistoryTools:
     async def test_notification_history(self) -> None:
         response = _mock_response(
-            json_data=_success_result({
-                "notificationlist": [
-                    {
-                        "timestamp": 1700000000000,
-                        "object_type": 2,
-                        "name": "lotor/HTTPS crunchtools.com",
-                        "contact": "hermes",
-                        "notification_type": 1,
-                        "method": "notify-hermes-service",
-                        "message": "CRITICAL - Connection refused",
-                    },
-                ],
-            }),
+            json_data=_success_result(
+                {
+                    "notificationlist": [
+                        {
+                            "timestamp": 1700000000000,
+                            "object_type": 2,
+                            "name": "lotor/HTTPS crunchtools.com",
+                            "contact": "hermes",
+                            "notification_type": 1,
+                            "method": "notify-hermes-service",
+                            "message": "CRITICAL - Connection refused",
+                        },
+                    ],
+                }
+            ),
         )
         with _patch_client(response):
             result = await notification_history(hours=1)
