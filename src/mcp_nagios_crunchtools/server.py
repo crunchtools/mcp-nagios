@@ -21,6 +21,11 @@ from .tools import (
 
 logger = logging.getLogger(__name__)
 
+# A gateway drops an invalid optional argument only on a tool annotated read-only;
+# on anything else it refuses the call. Only tools that change nothing in Nagios
+# get this: the three that submit an external command through cmd.cgi do not.
+READ_ONLY = {"readOnlyHint": True}
+
 
 @asynccontextmanager
 async def lifespan(_mcp: FastMCP) -> AsyncIterator[None]:
@@ -46,7 +51,7 @@ mcp = FastMCP(
 )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def nagios_host_status_tool(host_name: str) -> str:
     """Get the current status of a Nagios host.
 
@@ -59,7 +64,7 @@ async def nagios_host_status_tool(host_name: str) -> str:
     return await host_status(host_name)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def nagios_service_status_tool(host_name: str, service_description: str) -> str:
     """Get the current status of a specific service on a host.
 
@@ -73,7 +78,7 @@ async def nagios_service_status_tool(host_name: str, service_description: str) -
     return await service_status(host_name, service_description)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def nagios_current_problems_tool() -> str:
     """List all hosts and services currently in a non-OK state.
 
@@ -83,7 +88,7 @@ async def nagios_current_problems_tool() -> str:
     return await current_problems()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def nagios_program_status_tool(max_staleness_seconds: int = 60) -> str:
     """Check whether the Nagios daemon itself is alive and actually working.
 
@@ -168,7 +173,7 @@ async def nagios_schedule_check_tool(
     return await schedule_check(host_name, service_description)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def nagios_notification_history_tool(
     host_name: str | None = None,
     hours: int = 24,

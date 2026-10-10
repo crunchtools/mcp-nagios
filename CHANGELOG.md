@@ -6,7 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-10
+
+### Added
+- The five tools that only read (`nagios_host_status_tool`,
+  `nagios_service_status_tool`, `nagios_current_problems_tool`,
+  `nagios_program_status_tool`, `nagios_notification_history_tool`) publish
+  `readOnlyHint: true`. A gateway uses it to decide whether an invalid optional
+  argument may be dropped or must refuse the call (crunchtools/constitution#35).
+  The three tools that submit an external command through `cmd.cgi`
+  (acknowledge, add comment, schedule check) stay unannotated.
+- Tests pin every registered tool into `READ_ONLY` or `WRITES`, and check that
+  each read-only tool sends Nagios nothing but GET requests, none of them to
+  `cmd.cgi`.
+
 ### Changed
+- Inherits constitution v1.22.0; the workflow pins and the pre-commit hook rev
+  move with it.
 - Constitution is now a v1.18.0 manifest; constitution validation is pinned
   through `constitution.yml`, and Dependabot auto-merges GitHub Actions
   minor/patch updates.
