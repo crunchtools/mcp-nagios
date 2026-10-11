@@ -15,12 +15,12 @@ NAGIOS_URL=https://nagios.example.com NAGIOS_USER=admin NAGIOS_PASS=secret uv ru
 - `NAGIOS_USER` (required) — HTTP Basic Auth username
 - `NAGIOS_PASS` (required) — HTTP Basic Auth password
 
-## Tools (8)
+## Tools (9)
 
 ### Status
 - `nagios_host_status` — query host status
 - `nagios_service_status` — query service status
-- `nagios_current_problems` — all non-OK hosts/services
+- `nagios_current_problems` — all non-OK hosts/services, each with duration, attempt, acknowledgement and plugin output
 - `nagios_program_status` — health check on the monitoring path itself (wedged daemon, disabled notifications, stale status), separate from the state of monitored hosts/services
 
 ### Commands
@@ -30,6 +30,7 @@ NAGIOS_URL=https://nagios.example.com NAGIOS_USER=admin NAGIOS_PASS=secret uv ru
 
 ### History
 - `nagios_notification_history` — recent notifications
+- `nagios_alert_history` — state changes rolled up per host/service, including warnings and self-recovered problems
 
 ## Dev Commands
 
