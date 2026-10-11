@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-10
+
+### Fixed
+- Host alerts and host notifications were all attributed to "unknown host", which
+  merged every host's alerts into one row of `nagios_alert_history_tool`.
+  `archivejson.cgi` names the host in `name` on a host entry and in `host_name`
+  on a service entry.
+
 ## [0.4.0] - 2026-10-10
 
 ### Added

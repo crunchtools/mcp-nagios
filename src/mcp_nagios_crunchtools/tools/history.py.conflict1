@@ -10,7 +10,6 @@ from ..client import (
     _format_timestamp,
     get_client,
 )
-from ..models import HistoryInput
 
 # A week of alerts on a busy host runs to thousands of rows; the rollup is what
 # a reader needs, and the noisiest objects come first.
@@ -18,23 +17,17 @@ MAX_ALERT_OBJECTS = 40
 
 
 def _object_label(entry: dict[str, Any]) -> str:
-    """Name the host or service an archive entry is about.
-
-    archivejson.cgi names a host entry's host in `name` and a service entry's
-    host in `host_name` (read from the live CGI, 4.5.9).
-    """
-    if entry.get("object_type") == ARCHIVE_OBJECT_HOST:
-        return entry.get("name") or "unknown host"
+    """Name the host or service an archive entry is about."""
     host = entry.get("host_name") or "unknown host"
+    if entry.get("object_type") == ARCHIVE_OBJECT_HOST:
+        return host
     return f"{host} / {entry.get('description') or 'unknown service'}"
 
 
 def _archive_params(query: str, host_name: str | None, hours: int) -> dict[str, str]:
-    """Validate the range and build the archivejson.cgi query."""
-    window = HistoryInput(host_name=host_name, hours=hours)
-    params = {"query": query, "starttime": f"-{window.hours * 3600}", "endtime": "+0"}
-    if window.host_name:
-        params["hostname"] = window.host_name
+    params = {"query": query, "starttime": f"-{hours * 3600}", "endtime": "+0"}
+    if host_name:
+        params["hostname"] = host_name
     return params
 
 
@@ -43,8 +36,8 @@ async def notification_history(
     hours: int = 24,
 ) -> str:
     """Retrieve recent notification history."""
-    params = _archive_params("notificationlist", host_name, hours)
-    archive = await get_client().query_archive(params)
+    client = get_client()
+    archive = await client.query_archive(_archive_params("notificationlist", host_name, hours))
     notifications = archive["data"].get("notificationlist", [])
 
     if not notifications:
@@ -96,9 +89,9 @@ async def alert_history(
     host_name: str | None = None,
     hours: int = 168,
 ) -> str:
-    """Roll up state changes per host and service: what failed, how often, did it recover."""
-    params = _archive_params("alertlist", host_name, hours)
-    archive = await get_client().query_archive(params)
+    """Roll up state changes per host and service: what went wrong, how often, and whether it recovered."""
+    client = get_client()
+    archive = await client.query_archive(_archive_params("alertlist", host_name, hours))
     objects = _rollup(archive["data"].get("alertlist", []))
 
     if not objects:

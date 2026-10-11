@@ -19,7 +19,7 @@ FROM quay.io/hummingbird/python:latest
 # the 0.1.2 and 0.2.0 releases, which made a correctly-updated running
 # container look three versions stale on inspection.
 LABEL name="mcp-nagios-crunchtools" \
-      version="0.4.0" \
+      version="0.4.1" \
       summary="Secure MCP server for Nagios Core monitoring" \
       description="Query status, acknowledge problems, add comments, schedule checks" \
       maintainer="crunchtools.com" \

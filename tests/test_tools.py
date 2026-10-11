@@ -569,6 +569,21 @@ class TestHistoryTools:
         assert "lotor / HTTPS crunchtools.com → hermes" in result
         assert "unknown" not in result
 
+    async def test_a_host_notification_is_named_by_its_host(self) -> None:
+        """Regression: host entries carry `name`, not `host_name`, and read "unknown host"."""
+        entry = {
+            "timestamp": 1700000000000,
+            "object_type": 1,
+            "name": "ctr-rt.fatherlinux.com",
+            "contact": "hermes",
+            "method": "notify-hermes-host",
+            "message": "CRITICAL - Container rt.fatherlinux.com not found",
+        }
+        response = _mock_response(json_data=_success_result({"notificationlist": [entry]}))
+        with _patch_client(response):
+            result = await notification_history(hours=1)
+        assert "] ctr-rt.fatherlinux.com → hermes" in result
+
     async def test_notification_history_empty(self) -> None:
         response = _mock_response(
             json_data=_success_result({"notificationlist": []}),
@@ -612,7 +627,7 @@ class TestAlertHistory:
         alert = {
             "timestamp": 1700000000000,
             "object_type": 1,
-            "host_name": "web01",
+            "name": "web01",
             "state": 2,
             "state_type": 1,
         }
