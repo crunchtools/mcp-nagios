@@ -106,6 +106,17 @@ def _format_timestamp(epoch_ms: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(epoch_ms / 1000))
 
 
+def _format_age(elapsed_ms: int) -> str:
+    """Render a duration as its two largest units, e.g. "2d 3h" or "5h 12m"."""
+    minutes = max(elapsed_ms, 0) // 60000
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {mins}m"
+    return f"{mins}m"
+
+
 # Bitmask values used by statusjson.cgi. PENDING is 1, not 0 -- a service that
 # has never been checked returns 1, which previously fell through the map and
 # was rendered as the literal "UNKNOWN(1)".
@@ -118,3 +129,18 @@ STATE_TYPE_MAP = {0: "SOFT", 1: "HARD"}
 # Nagios restart, or for a service whose check_period has not opened yet).
 HOST_NON_PROBLEM_STATES = frozenset({1, 2})
 SERVICE_NON_PROBLEM_STATES = frozenset({1, 2})
+
+# archivejson.cgi uses a different bitmask from statusjson.cgi, one that puts
+# host and service states in the same field. Read from the live CGI (4.5.9).
+ARCHIVE_STATE_MAP = {
+    1: "UP",
+    2: "DOWN",
+    4: "UNREACHABLE",
+    8: "OK",
+    16: "WARNING",
+    32: "CRITICAL",
+    64: "UNKNOWN",
+}
+ARCHIVE_RECOVERED_STATES = frozenset({1, 8})
+ARCHIVE_STATE_TYPE_HARD = 1
+ARCHIVE_OBJECT_HOST = 1

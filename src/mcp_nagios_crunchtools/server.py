@@ -11,6 +11,7 @@ from .client import close_client
 from .tools import (
     acknowledge,
     add_comment,
+    alert_history,
     current_problems,
     host_status,
     notification_history,
@@ -44,7 +45,10 @@ mcp = FastMCP(
     instructions=(
         "MCP server for Nagios Core monitoring. Query host and service status, "
         "acknowledge problems, add comments, schedule forced checks, and "
-        "read notification history. To check whether Nagios ITSELF is alive and "
+        "read notification and alert history. Notifications only fire on what "
+        "Nagios is configured to page for; nagios_alert_history_tool shows every "
+        "state change, including warnings and problems that recovered by "
+        "themselves. To check whether Nagios ITSELF is alive and "
         "functioning -- as opposed to what it is reporting about other hosts -- "
         "use nagios_program_status_tool, not nagios_current_problems_tool."
     ),
@@ -83,7 +87,9 @@ async def nagios_current_problems_tool() -> str:
     """List all hosts and services currently in a non-OK state.
 
     Returns:
-        Summary of all current problems, or confirmation that everything is OK.
+        One line per problem with its state, how long it has been in that state,
+        attempt count, acknowledgement and plugin output, or confirmation that
+        everything is OK.
     """
     return await current_problems()
 
@@ -182,9 +188,31 @@ async def nagios_notification_history_tool(
 
     Args:
         host_name: Filter to a specific host. Omit for all hosts.
-        hours: How many hours of history to retrieve. Default 24.
+        hours: How many hours of history to retrieve, 1 to 744. Default 24.
 
     Returns:
         List of recent notifications with timestamps, contacts, and messages.
     """
     return await notification_history(host_name, hours)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def nagios_alert_history_tool(
+    host_name: str | None = None,
+    hours: int = 168,
+) -> str:
+    """Roll up Nagios state changes per host and service over a period.
+
+    Unlike notification history, this includes warnings, soft states and
+    problems that recovered without paging anyone, so it is where flapping shows.
+
+    Args:
+        host_name: Filter to a specific host. Omit for all hosts.
+        hours: How many hours of history to roll up, 1 to 744. Default 168 (one week).
+
+    Returns:
+        One line per host or service that had a problem: how many times, in
+        which states, first and last time, the last state seen, and the last
+        problem output. Noisiest first.
+    """
+    return await alert_history(host_name, hours)

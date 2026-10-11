@@ -1,5 +1,6 @@
 """Nagios status query tools."""
 
+import time
 from typing import Any
 
 from ..client import (
@@ -8,6 +9,7 @@ from ..client import (
     STATE_TYPE_MAP,
     STATUS_MAP_HOST,
     STATUS_MAP_SERVICE,
+    _format_age,
     _format_timestamp,
     get_client,
 )
@@ -44,11 +46,13 @@ async def host_status(host_name: str) -> str:
 async def service_status(host_name: str, service_description: str) -> str:
     """Query the status of a specific service on a host."""
     client = get_client()
-    service_response = await client.query_status({
-        "query": "service",
-        "hostname": host_name,
-        "servicedescription": service_description,
-    })
+    service_response = await client.query_status(
+        {
+            "query": "service",
+            "hostname": host_name,
+            "servicedescription": service_description,
+        }
+    )
     svc = service_response["data"]["service"]
 
     status_code = svc.get("status", 0)
@@ -68,26 +72,45 @@ async def service_status(host_name: str, service_description: str) -> str:
     return "\n".join(lines)
 
 
+def _problem_line(label: str, status: str, entry: dict[str, Any], now_ms: int) -> str:
+    """One current problem: state, how long, attempt, acknowledgement, plugin output."""
+    since = entry.get("last_state_change", 0)
+    state_type = STATE_TYPE_MAP.get(entry.get("state_type", 0), "UNKNOWN")
+    flags = [f"{state_type} {entry.get('current_attempt', 0)}/{entry.get('max_attempts', 0)}"]
+    if entry.get("problem_has_been_acknowledged"):
+        flags.append("acknowledged")
+    if entry.get("scheduled_downtime_depth", 0) > 0:
+        flags.append("in downtime")
+    duration = ""
+    if since > 0:
+        duration = f" for {_format_age(now_ms - since)} (since {_format_timestamp(since)})"
+    output = entry.get("plugin_output", "")
+    return f"  {label}: {status}{duration}, {', '.join(flags)} | {output}"
+
+
 async def current_problems() -> str:
-    """List all hosts and services currently in a non-OK state."""
+    """List all hosts and services currently in a non-OK state, with detail."""
     client = get_client()
+    now_ms = int(time.time() * 1000)
 
-    host_data = await client.query_status({"query": "hostlist"})
-    hosts = host_data["data"].get("hostlist", {})
-    down_hosts = [
-        (name, STATUS_MAP_HOST.get(code, f"UNKNOWN({code})"))
-        for name, code in hosts.items()
-        if code not in HOST_NON_PROBLEM_STATES
-    ]
+    host_data = await client.query_status({"query": "hostlist", "details": "true"})
+    down_hosts = []
+    for name, entry in host_data["data"].get("hostlist", {}).items():
+        code = entry.get("status", 0)
+        if code not in HOST_NON_PROBLEM_STATES:
+            status = STATUS_MAP_HOST.get(code, f"UNKNOWN({code})")
+            down_hosts.append(_problem_line(name, status, entry, now_ms))
 
-    svc_data = await client.query_status({"query": "servicelist"})
-    services = svc_data["data"].get("servicelist", {})
+    svc_data = await client.query_status({"query": "servicelist", "details": "true"})
     problem_services = []
-    for hostname, svcs in services.items():
-        for svc_name, code in svcs.items():
+    for hostname, svcs in svc_data["data"].get("servicelist", {}).items():
+        for svc_name, entry in svcs.items():
+            code = entry.get("status", 0)
             if code not in SERVICE_NON_PROBLEM_STATES:
-                status_text = STATUS_MAP_SERVICE.get(code, f"UNKNOWN({code})")
-                problem_services.append((hostname, svc_name, status_text))
+                status = STATUS_MAP_SERVICE.get(code, f"UNKNOWN({code})")
+                problem_services.append(
+                    _problem_line(f"{hostname} / {svc_name}", status, entry, now_ms)
+                )
 
     if not down_hosts and not problem_services:
         return "No current problems. All hosts UP, all services OK."
@@ -95,13 +118,11 @@ async def current_problems() -> str:
     lines = []
     if down_hosts:
         lines.append("=== Host Problems ===")
-        for name, status in down_hosts:
-            lines.append(f"  {name}: {status}")
+        lines.extend(down_hosts)
 
     if problem_services:
         lines.append("=== Service Problems ===")
-        for hostname, svc_name, status in problem_services:
-            lines.append(f"  {hostname} / {svc_name}: {status}")
+        lines.extend(problem_services)
 
     lines.append(f"\nTotal: {len(down_hosts)} host(s), {len(problem_services)} service(s)")
     return "\n".join(lines)
@@ -184,14 +205,16 @@ async def program_status(max_staleness_seconds: int = DEFAULT_MAX_STALENESS_SECO
     active_svc = prog.get("execute_service_checks", "unknown")
     passive_host = prog.get("accept_passive_host_checks", "unknown")
     passive_svc = prog.get("accept_passive_service_checks", "unknown")
-    lines.extend([
-        f"Version: {version} (pid {pid}, daemon_mode={daemon})",
-        f"Status Data Age: {freshness} (threshold {max_staleness_seconds}s)",
-        f"Program Start: {_format_timestamp(prog.get('program_start', 0))}",
-        f"Notifications Enabled: {prog.get('enable_notifications', 'unknown')}",
-        f"Active Checks: host={active_host} service={active_svc}",
-        f"Passive Checks: host={passive_host} service={passive_svc}",
-        f"Event Handlers Enabled: {prog.get('enable_event_handlers', 'unknown')}",
-        f"Flap Detection Enabled: {prog.get('enable_flap_detection', 'unknown')}",
-    ])
+    lines.extend(
+        [
+            f"Version: {version} (pid {pid}, daemon_mode={daemon})",
+            f"Status Data Age: {freshness} (threshold {max_staleness_seconds}s)",
+            f"Program Start: {_format_timestamp(prog.get('program_start', 0))}",
+            f"Notifications Enabled: {prog.get('enable_notifications', 'unknown')}",
+            f"Active Checks: host={active_host} service={active_svc}",
+            f"Passive Checks: host={passive_host} service={passive_svc}",
+            f"Event Handlers Enabled: {prog.get('enable_event_handlers', 'unknown')}",
+            f"Flap Detection Enabled: {prog.get('enable_flap_detection', 'unknown')}",
+        ]
+    )
     return "\n".join(lines)

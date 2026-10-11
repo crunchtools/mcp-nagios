@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-10
+
+### Added
+- `nagios_alert_history_tool` rolls up the alert log per host and service over a
+  period (default one week): how many problem events, in which states, how many
+  hard, first and last time, the last state seen, and the last problem output.
+  Notifications fire only on what Nagios pages for, so warnings and problems that
+  recovered by themselves were invisible until now.
+- `nagios_current_problems_tool` reports, for each problem, how long it has been
+  in that state, soft or hard with the attempt count, whether it is acknowledged
+  or in downtime, and the plugin output.
+- Both history tools validate their input: `hours` from 1 to 744 (one month) and
+  a host name of at most 255 characters.
+
+### Fixed
+- `nagios_notification_history_tool` named every row "Service unknown". It read a
+  `name` field that `archivejson.cgi` does not return; the host is in `host_name`
+  and the service in `description`.
+
 ## [0.3.0] - 2026-10-10
 
 ### Added

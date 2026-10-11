@@ -9,12 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from mcp_nagios_crunchtools import client as client_mod
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
     acknowledge,
     add_comment,
+    alert_history,
     current_problems,
     host_status,
     notification_history,
@@ -23,10 +25,11 @@ from mcp_nagios_crunchtools.tools import (
     service_status,
 )
 from mcp_nagios_crunchtools.tools import commands as commands_mod
+from mcp_nagios_crunchtools.tools import history as history_mod
 
 from .conftest import _mock_response, _patch_client
 
-TOOL_COUNT = 8
+TOOL_COUNT = 9
 
 READ_ONLY = frozenset(
     {
@@ -35,6 +38,7 @@ READ_ONLY = frozenset(
         "nagios_current_problems_tool",
         "nagios_program_status_tool",
         "nagios_notification_history_tool",
+        "nagios_alert_history_tool",
     }
 )
 # Each of these submits a Nagios external command through cmd.cgi.
@@ -53,6 +57,7 @@ READ_ONLY_CALLS: dict[str, dict[str, Any]] = {
     "nagios_current_problems_tool": {},
     "nagios_program_status_tool": {},
     "nagios_notification_history_tool": {"host_name": "web01", "hours": 1},
+    "nagios_alert_history_tool": {"host_name": "web01", "hours": 1},
 }
 
 # One body that answers every statusjson.cgi / archivejson.cgi query the reads make.
@@ -63,6 +68,7 @@ _ANY_QUERY_DATA: dict[str, Any] = {
     "servicelist": {},
     "programstatus": {},
     "notificationlist": [],
+    "alertlist": [],
 }
 
 
@@ -181,7 +187,7 @@ class TestStatusTools:
 
     async def test_current_problems_none(self) -> None:
         host_resp = _mock_response(
-            json_data=_success_result({"hostlist": {"lotor": 2}}),
+            json_data=_success_result({"hostlist": {"lotor": {"status": 2}}}),
         )
         with _patch_client(host_resp):
             result = await current_problems()
@@ -189,7 +195,7 @@ class TestStatusTools:
 
     async def test_current_problems_with_issues(self) -> None:
         host_resp = _mock_response(
-            json_data=_success_result({"hostlist": {"lotor": 4}}),
+            json_data=_success_result({"hostlist": {"lotor": {"status": 4}}}),
         )
         with _patch_client(host_resp):
             result = await current_problems()
@@ -198,7 +204,7 @@ class TestStatusTools:
     async def test_pending_host_is_not_a_problem(self) -> None:
         """statusjson.cgi returns 1 for a host that has never been checked."""
         host_resp = _mock_response(
-            json_data=_success_result({"hostlist": {"lotor": 1}}),
+            json_data=_success_result({"hostlist": {"lotor": {"status": 1}}}),
         )
         with _patch_client(host_resp):
             result = await current_problems()
@@ -213,16 +219,16 @@ class TestStatusTools:
         outage -- notably after any Nagios restart.
         """
         host_resp = _mock_response(
-            json_data=_success_result({"hostlist": {"lotor": 2}}),
+            json_data=_success_result({"hostlist": {"lotor": {"status": 2}}}),
         )
         svc_resp = _mock_response(
             json_data=_success_result(
                 {
                     "servicelist": {
                         "ctr-rootsofthevalley.org": {
-                            "Train tracker": 1,
-                            "Water taxi tracker": 1,
-                            "HTTPS": 2,
+                            "Train tracker": {"status": 1},
+                            "Water taxi tracker": {"status": 1},
+                            "HTTPS": {"status": 2},
                         }
                     }
                 }
@@ -236,16 +242,16 @@ class TestStatusTools:
 
     async def test_real_problems_still_reported_alongside_pending(self) -> None:
         host_resp = _mock_response(
-            json_data=_success_result({"hostlist": {"lotor": 2}}),
+            json_data=_success_result({"hostlist": {"lotor": {"status": 2}}}),
         )
         svc_resp = _mock_response(
             json_data=_success_result(
                 {
                     "servicelist": {
                         "ctr-rootsofthevalley.org": {
-                            "Train tracker": 1,
-                            "HTTPS external": 16,
-                            "Container memory": 4,
+                            "Train tracker": {"status": 1},
+                            "HTTPS external": {"status": 16},
+                            "Container memory": {"status": 4},
                         }
                     }
                 }
@@ -258,6 +264,47 @@ class TestStatusTools:
         assert "Train tracker" not in result
         assert "1 service(s)" not in result
         assert "2 service(s)" in result
+
+    async def test_current_problem_carries_its_detail(self) -> None:
+        """State alone is not actionable: say since when, how sure, and what the plugin said."""
+        three_hours_ago = int((time.time() - 3 * 3600 - 300) * 1000)
+        host_resp = _mock_response(
+            json_data=_success_result({"hostlist": {"lotor": {"status": 2}}}),
+        )
+        disk = {
+            "status": 4,
+            "state_type": 1,
+            "current_attempt": 3,
+            "max_attempts": 3,
+            "last_state_change": three_hours_ago,
+            "problem_has_been_acknowledged": True,
+            "scheduled_downtime_depth": 1,
+            "plugin_output": "DISK WARNING - free space: / 9GB (12%)",
+        }
+        svc_resp = _mock_response(
+            json_data=_success_result({"servicelist": {"lotor": {"Host disk root": disk}}}),
+        )
+        with _patch_client(host_resp, svc_resp):
+            result = await current_problems()
+        assert "lotor / Host disk root: WARNING for 3h 5m (since " in result
+        assert "HARD 3/3, acknowledged, in downtime" in result
+        assert "DISK WARNING - free space: / 9GB (12%)" in result
+
+    async def test_current_problem_without_optional_detail(self) -> None:
+        """A soft, unacknowledged problem with no state-change time claims none of them."""
+        host_resp = _mock_response(
+            json_data=_success_result({"hostlist": {"lotor": {"status": 2}}}),
+        )
+        soft = {"status": 16, "state_type": 0, "current_attempt": 1, "max_attempts": 3}
+        svc_resp = _mock_response(
+            json_data=_success_result({"servicelist": {"lotor": {"HTTPS": soft}}}),
+        )
+        with _patch_client(host_resp, svc_resp):
+            result = await current_problems()
+        assert "  lotor / HTTPS: CRITICAL, SOFT 1/3 | " in result
+        assert "acknowledged" not in result
+        assert "in downtime" not in result
+        assert " for " not in result
 
     async def test_pending_renders_as_pending_in_service_status(self) -> None:
         response = _mock_response(
@@ -502,7 +549,8 @@ class TestHistoryTools:
                         {
                             "timestamp": 1700000000000,
                             "object_type": 2,
-                            "name": "lotor/HTTPS crunchtools.com",
+                            "host_name": "lotor",
+                            "description": "HTTPS crunchtools.com",
                             "contact": "hermes",
                             "notification_type": 1,
                             "method": "notify-hermes-service",
@@ -516,6 +564,10 @@ class TestHistoryTools:
             result = await notification_history(hours=1)
         assert "hermes" in result
         assert "CRITICAL" in result
+        # Regression: the row read a `name` field archivejson.cgi does not
+        # return, so every notification was reported as "Service unknown".
+        assert "lotor / HTTPS crunchtools.com → hermes" in result
+        assert "unknown" not in result
 
     async def test_notification_history_empty(self) -> None:
         response = _mock_response(
@@ -524,6 +576,88 @@ class TestHistoryTools:
         with _patch_client(response):
             result = await notification_history(hours=1)
         assert "No notifications" in result
+
+
+def _alert(minute: int, service: str, state: int, state_type: int, output: str) -> dict[str, Any]:
+    return {
+        "timestamp": 1700000000000 + minute * 60000,
+        "object_type": 2,
+        "host_name": "lotor",
+        "description": service,
+        "state_type": state_type,
+        "state": state,
+        "plugin_output": output,
+    }
+
+
+class TestAlertHistory:
+    async def test_rolls_up_per_service_noisiest_first(self) -> None:
+        alerts = [
+            _alert(0, "RT FastCGI", 32, 2, "CRITICAL - 0 processes"),
+            _alert(1, "RT FastCGI", 8, 2, "OK - 1 processes running"),
+            _alert(2, "Host disk root", 16, 1, "DISK WARNING - 12% free"),
+            _alert(5, "RT FastCGI", 32, 1, "CRITICAL - 0 processes (minimum 1)"),
+            _alert(6, "RT FastCGI", 8, 1, "OK - 1 processes running"),
+        ]
+        response = _mock_response(json_data=_success_result({"alertlist": alerts}))
+        with _patch_client(response):
+            lines = (await alert_history(hours=168)).splitlines()
+        assert "2 host(s)/service(s)" in lines[0]
+        assert lines[1].startswith("  lotor / RT FastCGI: 2 problem event(s) (2 CRITICAL; 1 hard),")
+        assert "last seen OK | CRITICAL - 0 processes (minimum 1)" in lines[1]
+        assert lines[2].startswith("  lotor / Host disk root: 1 problem event(s) (1 WARNING;")
+        assert "last seen WARNING" in lines[2]
+
+    async def test_a_host_alert_is_named_by_host_alone(self) -> None:
+        alert = {
+            "timestamp": 1700000000000,
+            "object_type": 1,
+            "host_name": "web01",
+            "state": 2,
+            "state_type": 1,
+        }
+        response = _mock_response(json_data=_success_result({"alertlist": [alert]}))
+        with _patch_client(response):
+            result = await alert_history(hours=24)
+        assert "  web01: 1 problem event(s) (1 DOWN; 1 hard)" in result
+
+    async def test_order_comes_from_timestamps_not_from_the_response(self) -> None:
+        alerts = [
+            _alert(6, "RT FastCGI", 8, 1, "OK - 1 processes running"),
+            _alert(5, "RT FastCGI", 32, 1, "CRITICAL - later"),
+            _alert(0, "RT FastCGI", 32, 2, "CRITICAL - earlier"),
+        ]
+        response = _mock_response(json_data=_success_result({"alertlist": alerts}))
+        with _patch_client(response):
+            result = await alert_history(hours=24)
+        assert "last seen OK | CRITICAL - later" in result
+
+    async def test_only_the_noisiest_objects_are_listed(self) -> None:
+        count = history_mod.MAX_ALERT_OBJECTS + 3
+        alerts = [_alert(i, f"svc-{i}", 32, 1, "CRITICAL") for i in range(count)]
+        response = _mock_response(json_data=_success_result({"alertlist": alerts}))
+        with _patch_client(response):
+            lines = (await alert_history(hours=24)).splitlines()
+        assert len(lines) == history_mod.MAX_ALERT_OBJECTS + 2
+        assert lines[-1] == "  ... and 3 quieter one(s) not shown"
+
+    @pytest.mark.parametrize("hours", [0, 745])
+    async def test_range_is_bounded(self, hours: int) -> None:
+        with pytest.raises(ValidationError):
+            await alert_history(hours=hours)
+        with pytest.raises(ValidationError):
+            await notification_history(hours=hours)
+
+    async def test_host_name_is_length_bounded(self) -> None:
+        with pytest.raises(ValidationError):
+            await alert_history(host_name="h" * 256)
+
+    async def test_recoveries_alone_are_not_reported(self) -> None:
+        alerts = [_alert(0, "HTTPS", 8, 1, "OK")]
+        response = _mock_response(json_data=_success_result({"alertlist": alerts}))
+        with _patch_client(response):
+            result = await alert_history(hours=24)
+        assert "No problem alerts" in result
 
 
 async def test_tool_count() -> None:

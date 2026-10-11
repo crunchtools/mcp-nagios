@@ -36,12 +36,13 @@ it introduced is why `TZ` belongs in this table rather than being left implicit.
 |------|-------------|
 | `nagios_host_status` | Query a single host's status |
 | `nagios_service_status` | Query a single service's status |
-| `nagios_current_problems` | All hosts/services not in OK state |
+| `nagios_current_problems` | All hosts/services not in OK state, with duration, attempt, acknowledgement and plugin output |
 | `nagios_program_status` | Health check on the monitoring path itself (wedged daemon, disabled notifications, stale status) -- not the same as no current problems |
 | `nagios_acknowledge` | Acknowledge a host or service problem |
 | `nagios_add_comment` | Add a comment to a host or service |
 | `nagios_schedule_check` | Force an immediate re-check |
 | `nagios_notification_history` | Recent notifications |
+| `nagios_alert_history` | State changes rolled up per host/service, including warnings and problems that recovered by themselves |
 
 ## License
 
