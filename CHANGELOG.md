@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
 ### Added
 - `NAGIOS_COMMENT_AUTHOR` sets the author recorded on acknowledgements and
   comments. It falls back to `NAGIOS_USER`. It is deliberately not a tool
