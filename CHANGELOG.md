@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `NAGIOS_COMMENT_AUTHOR` sets the author recorded on acknowledgements and
+  comments. It falls back to `NAGIOS_USER`. It is deliberately not a tool
+  parameter, so the caller cannot choose whose name goes on the record.
+
+### Changed
+- The read tools publish their bounds in the tool schema (`hours` 1 to 744, host
+  and service name lengths, `max_staleness_seconds` at least 1), so a client can
+  reject a bad value, such as a negative `hours`, before calling.
+
+### Fixed
+- Acknowledgements and comments were always authored by the fixed string
+  "Hermes".
+
 ## [0.4.1] - 2026-10-10
 
 ### Fixed

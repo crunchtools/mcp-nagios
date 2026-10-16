@@ -14,6 +14,7 @@ NAGIOS_URL=https://nagios.example.com NAGIOS_USER=admin NAGIOS_PASS=secret uv ru
 - `NAGIOS_URL` (required) — Nagios base URL
 - `NAGIOS_USER` (required) — HTTP Basic Auth username
 - `NAGIOS_PASS` (required) — HTTP Basic Auth password
+- `NAGIOS_COMMENT_AUTHOR` (optional) — author on acknowledgements/comments; defaults to `NAGIOS_USER`
 
 ## Tools (9)
 
