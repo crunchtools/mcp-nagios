@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from mcp_nagios_crunchtools import client as client_mod
+from mcp_nagios_crunchtools.models import MAX_HISTORY_HOURS
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
     acknowledge,
@@ -538,6 +539,50 @@ class TestCommandTools:
         # Compare to the minute so a second ticking over mid-test cannot flake.
         assert captured["start_time"][:16] == local[:16]
         assert captured["start_time"][:16] != utc[:16]
+
+
+class TestCommentAuthor:
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            ({"NAGIOS_COMMENT_AUTHOR": "oncall", "NAGIOS_USER": "admin"}, "oncall"),
+            ({"NAGIOS_USER": "admin"}, "admin"),
+        ],
+    )
+    async def test_author_from_environment(
+        self, monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected: str
+    ) -> None:
+        monkeypatch.delenv("NAGIOS_COMMENT_AUTHOR", raising=False)
+        monkeypatch.setenv("NAGIOS_URL", "https://nagios.example.com")
+        monkeypatch.setenv("NAGIOS_PASS", "secret")
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+
+        sent: list[dict[str, str]] = []
+
+        async def _capture(_cmd_typ: int, form_data: dict[str, str]) -> str:
+            sent.append(form_data)
+            return "ok"
+
+        client = MagicMock()
+        client.submit_command = _capture
+        with patch.object(commands_mod, "get_client", return_value=client):
+            await acknowledge("lotor", "Investigating")
+            await add_comment("lotor", "Note", "HTTPS")
+        assert [form["com_author"] for form in sent] == [expected, expected]
+
+
+class TestReadSchemaBounds:
+    async def test_hours_bounds_are_published(self) -> None:
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        for name in ("nagios_notification_history_tool", "nagios_alert_history_tool"):
+            hours = tools[name].parameters["properties"]["hours"]
+            assert hours["minimum"] == 1
+            assert hours["maximum"] == MAX_HISTORY_HOURS
+
+    async def test_negative_hours_rejected(self) -> None:
+        with pytest.raises(Exception, match="hours"):
+            await mcp.call_tool("nagios_alert_history_tool", {"hours": -5})
 
 
 class TestHistoryTools:

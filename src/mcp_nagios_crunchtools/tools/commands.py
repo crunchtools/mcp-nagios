@@ -2,6 +2,7 @@
 
 import time
 
+from .. import config
 from ..client import get_client
 from ..models import AcknowledgeInput, CommentInput, ScheduleCheckInput
 
@@ -29,24 +30,24 @@ async def acknowledge(
         notify=notify,
     )
     client = get_client()
+    author = config.get_config().comment_author
 
     if params.service_description:
         form_data = {
             "host": params.host_name,
             "service": params.service_description,
-            "com_author": "Hermes",
+            "com_author": author,
             "com_data": params.comment,
             "sticky_ack": "on" if params.sticky else "",
             "send_notification": "on" if params.notify else "",
         }
         result = await client.submit_command(CMD_ACKNOWLEDGE_SERVICE, form_data)
         return (
-            f"Acknowledged service '{params.service_description}' "
-            f"on '{params.host_name}': {result}"
+            f"Acknowledged service '{params.service_description}' on '{params.host_name}': {result}"
         )
     form_data = {
         "host": params.host_name,
-        "com_author": "Hermes",
+        "com_author": author,
         "com_data": params.comment,
         "sticky_ack": "on" if params.sticky else "",
         "send_notification": "on" if params.notify else "",
@@ -67,12 +68,13 @@ async def add_comment(
         service_description=service_description,
     )
     client = get_client()
+    author = config.get_config().comment_author
 
     if params.service_description:
         form_data = {
             "host": params.host_name,
             "service": params.service_description,
-            "com_author": "Hermes",
+            "com_author": author,
             "com_data": params.comment,
             "persistent": "on",
         }
@@ -83,7 +85,7 @@ async def add_comment(
         )
     form_data = {
         "host": params.host_name,
-        "com_author": "Hermes",
+        "com_author": author,
         "com_data": params.comment,
         "persistent": "on",
     }

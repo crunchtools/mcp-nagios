@@ -15,6 +15,7 @@ uvx mcp-nagios-crunchtools
 | `NAGIOS_URL` | Yes | Base URL (e.g., `https://nagios.example.com`) |
 | `NAGIOS_USER` | Yes | HTTP Basic Auth username |
 | `NAGIOS_PASS` | Yes | HTTP Basic Auth password |
+| `NAGIOS_COMMENT_AUTHOR` | No | Author recorded on acknowledgements and comments. Defaults to `NAGIOS_USER`. Not a tool parameter. |
 | `TZ` | Effectively yes | The container's local timezone. Must match the Nagios server's own timezone. |
 
 ### Why `TZ` matters

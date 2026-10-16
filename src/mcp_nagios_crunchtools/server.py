@@ -3,11 +3,14 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from . import __version__
 from .client import close_client
+from .models import MAX_HISTORY_HOURS, MAX_HOSTNAME_LENGTH, MAX_SERVICE_DESC_LENGTH
 from .tools import (
     acknowledge,
     add_comment,
@@ -21,6 +24,12 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Published in each read tool's JSON schema so a client sees the bounds up front.
+HostName = Annotated[str, Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)]
+OptionalHostName = Annotated[str | None, Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)]
+ServiceDescription = Annotated[str, Field(min_length=1, max_length=MAX_SERVICE_DESC_LENGTH)]
+Hours = Annotated[int, Field(ge=1, le=MAX_HISTORY_HOURS)]
 
 # A gateway drops an invalid optional argument only on a tool annotated read-only;
 # on anything else it refuses the call. Only tools that change nothing in Nagios
@@ -56,7 +65,7 @@ mcp = FastMCP(
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def nagios_host_status_tool(host_name: str) -> str:
+async def nagios_host_status_tool(host_name: HostName) -> str:
     """Get the current status of a Nagios host.
 
     Args:
@@ -69,7 +78,9 @@ async def nagios_host_status_tool(host_name: str) -> str:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def nagios_service_status_tool(host_name: str, service_description: str) -> str:
+async def nagios_service_status_tool(
+    host_name: HostName, service_description: ServiceDescription
+) -> str:
     """Get the current status of a specific service on a host.
 
     Args:
@@ -95,7 +106,9 @@ async def nagios_current_problems_tool() -> str:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def nagios_program_status_tool(max_staleness_seconds: int = 60) -> str:
+async def nagios_program_status_tool(
+    max_staleness_seconds: Annotated[int, Field(ge=1)] = 60,
+) -> str:
     """Check whether the Nagios daemon itself is alive and actually working.
 
     Use this to verify the monitoring system, NOT to find outages. It is the
@@ -181,8 +194,8 @@ async def nagios_schedule_check_tool(
 
 @mcp.tool(annotations=READ_ONLY)
 async def nagios_notification_history_tool(
-    host_name: str | None = None,
-    hours: int = 24,
+    host_name: OptionalHostName = None,
+    hours: Hours = 24,
 ) -> str:
     """Retrieve recent notification history from Nagios.
 
@@ -198,8 +211,8 @@ async def nagios_notification_history_tool(
 
 @mcp.tool(annotations=READ_ONLY)
 async def nagios_alert_history_tool(
-    host_name: str | None = None,
-    hours: int = 168,
+    host_name: OptionalHostName = None,
+    hours: Hours = 168,
 ) -> str:
     """Roll up Nagios state changes per host and service over a period.
 

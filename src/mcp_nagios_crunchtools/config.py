@@ -29,6 +29,9 @@ class Config:
         self._url = url.rstrip("/")
         self._username = username
         self._password = SecretStr(password)
+        # Set by the operator, never by the tool caller: the caller must not
+        # choose whose name goes on the record.
+        self._comment_author = os.environ.get("NAGIOS_COMMENT_AUTHOR") or username or "Hermes"
 
         logger.info("Configuration loaded successfully")
 
@@ -39,6 +42,10 @@ class Config:
     @property
     def username(self) -> str:
         return self._username
+
+    @property
+    def comment_author(self) -> str:
+        return self._comment_author
 
     @property
     def password(self) -> str:
