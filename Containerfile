@@ -1,7 +1,7 @@
 
 
 # Stage 1: Builder (has a shell, dnf and build tools)
-FROM quay.io/hummingbird/python:latest-builder AS builder
+FROM quay.io/hummingbird/python:3.14-builder AS builder
 USER 0
 WORKDIR /app
 RUN python3 -m venv /app/venv
@@ -11,7 +11,7 @@ COPY src/ ./src/
 RUN pip install --no-cache-dir .
 
 # Stage 2: Runtime (distroless -- no shell, no package manager)
-FROM quay.io/hummingbird/python:latest
+FROM quay.io/hummingbird/python:3.14
 
 # version MUST track pyproject.toml. It is a fourth copy of the version string
 # that check_version_sync() does not look at (it checks pyproject.toml,
