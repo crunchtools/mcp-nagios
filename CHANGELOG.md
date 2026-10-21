@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `NAGIOS_CGI_PREFIX` sets the CGI path under `NAGIOS_URL`, for Nagios served
+  somewhere other than `/nagios/`. It defaults to `/nagios/cgi-bin`, so existing
+  setups are unchanged. A trailing slash is ignored.
+
 ## [0.6.0] - 2026-10-20
 
 ### Changed

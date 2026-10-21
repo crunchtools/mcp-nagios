@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from mcp_nagios_crunchtools import client as client_mod
+from mcp_nagios_crunchtools.config import Config
 from mcp_nagios_crunchtools.models import MAX_HISTORY_HOURS
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
@@ -539,6 +540,32 @@ class TestCommandTools:
         # Compare to the minute so a second ticking over mid-test cannot flake.
         assert captured["start_time"][:16] == local[:16]
         assert captured["start_time"][:16] != utc[:16]
+
+
+class TestCgiPrefix:
+    @pytest.mark.parametrize(
+        ("prefix", "base"),
+        [
+            (None, "https://nagios.example.com/nagios/cgi-bin"),
+            ("/cgi-bin", "https://nagios.example.com/cgi-bin"),
+            ("/custom/cgi-bin/", "https://nagios.example.com/custom/cgi-bin"),
+        ],
+    )
+    def test_cgi_urls_use_prefix(
+        self, monkeypatch: pytest.MonkeyPatch, prefix: str | None, base: str
+    ) -> None:
+        monkeypatch.setenv("NAGIOS_URL", "https://nagios.example.com")
+        monkeypatch.setenv("NAGIOS_USER", "admin")
+        monkeypatch.setenv("NAGIOS_PASS", "secret")
+        if prefix is None:
+            monkeypatch.delenv("NAGIOS_CGI_PREFIX", raising=False)
+        else:
+            monkeypatch.setenv("NAGIOS_CGI_PREFIX", prefix)
+
+        cfg = Config()
+        assert cfg.status_cgi_url == f"{base}/statusjson.cgi"
+        assert cfg.archive_cgi_url == f"{base}/archivejson.cgi"
+        assert cfg.cmd_cgi_url == f"{base}/cmd.cgi"
 
 
 class TestCommentAuthor:
