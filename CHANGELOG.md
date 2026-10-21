@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
 ### Added
 
 - `NAGIOS_CGI_PREFIX` sets the CGI path under `NAGIOS_URL`, for Nagios served
