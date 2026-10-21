@@ -29,6 +29,8 @@ class Config:
         self._url = url.rstrip("/")
         self._username = username
         self._password = SecretStr(password)
+        cgi_prefix = os.environ.get("NAGIOS_CGI_PREFIX", "/nagios/cgi-bin").strip("/")
+        self._cgi_prefix = f"/{cgi_prefix}" if cgi_prefix else ""
         # Set by the operator, never by the tool caller: the caller must not
         # choose whose name goes on the record.
         self._comment_author = os.environ.get("NAGIOS_COMMENT_AUTHOR") or username or "Hermes"
@@ -53,15 +55,15 @@ class Config:
 
     @property
     def status_cgi_url(self) -> str:
-        return f"{self._url}/nagios/cgi-bin/statusjson.cgi"
+        return f"{self._url}{self._cgi_prefix}/statusjson.cgi"
 
     @property
     def archive_cgi_url(self) -> str:
-        return f"{self._url}/nagios/cgi-bin/archivejson.cgi"
+        return f"{self._url}{self._cgi_prefix}/archivejson.cgi"
 
     @property
     def cmd_cgi_url(self) -> str:
-        return f"{self._url}/nagios/cgi-bin/cmd.cgi"
+        return f"{self._url}{self._cgi_prefix}/cmd.cgi"
 
     def __repr__(self) -> str:
         return f"Config(url={self._url!r}, user={self._username!r}, password=***)"

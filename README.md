@@ -16,6 +16,7 @@ uvx mcp-nagios-crunchtools
 | `NAGIOS_USER` | Yes | HTTP Basic Auth username |
 | `NAGIOS_PASS` | Yes | HTTP Basic Auth password |
 | `NAGIOS_COMMENT_AUTHOR` | No | Author recorded on acknowledgements and comments. Defaults to `NAGIOS_USER`. Not a tool parameter. |
+| `NAGIOS_CGI_PREFIX` | No | Path under `NAGIOS_URL` where the CGI scripts are served. Defaults to `/nagios/cgi-bin`. Set to `/cgi-bin` for a Nagios served at the web root. A trailing slash is ignored. |
 | `TZ` | Effectively yes | The container's local timezone. Must match the Nagios server's own timezone. |
 
 ### Why `TZ` matters
