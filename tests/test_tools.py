@@ -996,6 +996,33 @@ class TestDowntimeHistory:
         assert lines[0].endswith("1 scheduling(s):")
         assert lines[1].startswith("  ctr-x [host; MCP port]: ")
 
+    async def test_separate_schedulings_stay_separate(self, tmp_path: Any) -> None:
+        first = f"ctr-x;MCP port;{_T0};{_T0 + 600};1;0;600;josui;deploy"
+        second = f"ctr-x;MCP port;{_T0 + 700};{_T0 + 900};1;0;200;josui;deploy"
+        path = tmp_path / "nagios.log"
+        path.write_text(
+            "\n".join(
+                [
+                    f"[{_T0}] EXTERNAL COMMAND: SCHEDULE_SVC_DOWNTIME;{first}",
+                    f"[{_T0}] SERVICE DOWNTIME ALERT: ctr-x;MCP port;STARTED; x",
+                    f"[{_T0 + 600}] SERVICE DOWNTIME ALERT: ctr-x;MCP port;STOPPED; x",
+                    f"[{_T0 + 700}] EXTERNAL COMMAND: SCHEDULE_SVC_DOWNTIME;{second}",
+                    f"[{_T0 + 700}] SERVICE DOWNTIME ALERT: ctr-x;MCP port;STARTED; x",
+                    f"[{_T0 + 900}] SERVICE DOWNTIME ALERT: ctr-x;MCP port;STOPPED; x",
+                    # No logged command: grouped by its own start, author unknown.
+                    f"[{_T0 + 950}] SERVICE DOWNTIME ALERT: ctr-x;Index run;STARTED; x",
+                    f"[{_T0 + 990}] SERVICE DOWNTIME ALERT: ctr-x;Index run;STOPPED; x",
+                ]
+            )
+        )
+        with patch.object(config_mod, "get_config", return_value=MagicMock(log_path=str(path))):
+            lines = (await downtime_history(hours=24)).splitlines()
+        assert lines[0].endswith("3 scheduling(s):")
+        assert lines[1].endswith("(10m) | josui: deploy")
+        assert lines[2].endswith("(3m) | josui: deploy")
+        assert lines[3].startswith("  ctr-x [Index run]: ")
+        assert lines[3].endswith("| unknown: ")
+
     def test_a_repeated_start_keeps_the_original_window(self, tmp_path: Any) -> None:
         path = tmp_path / "nagios.log"
         path.write_text(

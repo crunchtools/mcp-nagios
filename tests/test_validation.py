@@ -3,7 +3,12 @@
 import pytest
 from pydantic import ValidationError
 
-from mcp_nagios_crunchtools.models import AcknowledgeInput, CommentInput, ScheduleCheckInput
+from mcp_nagios_crunchtools.models import (
+    AcknowledgeInput,
+    CommentInput,
+    ListDowntimesInput,
+    ScheduleCheckInput,
+)
 
 
 class TestAcknowledgeInput:
@@ -51,6 +56,19 @@ class TestScheduleCheckInput:
     def test_valid_host_only(self) -> None:
         inp = ScheduleCheckInput(host_name="lotor")
         assert inp.service_description is None
+
+
+class TestListDowntimesInput:
+    def test_host_is_optional(self) -> None:
+        assert ListDowntimesInput().host_name is None
+
+    def test_single_character_host(self) -> None:
+        assert ListDowntimesInput(host_name="h").host_name == "h"
+
+    @pytest.mark.parametrize("host", ["", "h" * 256])
+    def test_bad_host_rejected(self, host: str) -> None:
+        with pytest.raises(ValidationError):
+            ListDowntimesInput(host_name=host)
 
 
 class TestWritePathValidation:
