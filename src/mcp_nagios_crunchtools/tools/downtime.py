@@ -249,11 +249,17 @@ class _WindowBuilder:
         )
 
     def finish(self, now_ms: int) -> list[Window]:
-        """Close out: a window still open is ongoing, ending at its scheduled end or now."""
+        """Close out the windows the log never stopped.
+
+        One whose scheduled end has passed ended then: Nagios restarted inside it
+        and never logged the STOPPED. Otherwise it is ongoing, ending at its
+        scheduled end, or now if that is unknown.
+        """
         for window in self._open.values():
-            window.ongoing = True
+            window.ongoing = not window.end or window.end > now_ms
             window.end = window.end or now_ms
-            self.windows.append(window)
+            if window.end >= self._since_ms:
+                self.windows.append(window)
         self._open = {}
         return self.windows
 

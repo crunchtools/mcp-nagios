@@ -912,7 +912,7 @@ class TestListAndCancelDowntime:
 _T0 = int(time.time()) - 3600
 
 _GRAFANA = f"ctr-grafana;{_T0};{_T0 + 900};1;0;900;josui;tig deploy; part 2"
-_SYSTEMD = f"lotor;Host failed systemd units;{_T0 + 1000};{_T0 + 1600};1;0;600;admin;restart"
+_SYSTEMD = f"lotor;Host failed systemd units;{_T0 + 1000};{_T0 + 4600};1;0;3600;admin;restart"
 _LOG = "\n".join(
     f"[{ts}] {text}"
     for ts, text in [
@@ -958,7 +958,7 @@ class TestDowntimeHistory:
         assert windows["ctr-grafana / HTTPS external"].end == (_T0 + 700) * 1000
         # Still open: ongoing, and keeps its scheduled end rather than now.
         systemd = windows["lotor / Host failed systemd units"]
-        assert (systemd.end, systemd.ongoing) == ((_T0 + 1600) * 1000, True)
+        assert (systemd.end, systemd.ongoing) == ((_T0 + 4600) * 1000, True)
         assert not port.ongoing
 
     def test_range_keeps_windows_that_overlap_it(self, tmp_path: Any) -> None:
@@ -1023,6 +1023,24 @@ class TestDowntimeHistory:
         assert lines[3].startswith("  ctr-x [Index run]: ")
         assert lines[3].endswith("| unknown: ")
 
+    def test_a_window_never_stopped_ends_at_its_scheduled_end(self, tmp_path: Any) -> None:
+        """Regression: Nagios restarted inside a window and never logged STOPPED.
+
+        Live history showed a September window as "ongoing" a month later.
+        """
+        path = tmp_path / "nagios.log"
+        path.write_text(
+            "\n".join(
+                [
+                    "[100] EXTERNAL COMMAND: SCHEDULE_SVC_DOWNTIME;h;svc;100;700;1;0;600;josui;x",
+                    "[100] SERVICE DOWNTIME ALERT: h;svc;STARTED; x",
+                ]
+            )
+        )
+        (window,) = downtime_mod._read_windows(str(path), 900_000)
+        assert (window.end, window.ongoing) == (700_000, False)
+        assert downtime_mod._read_windows(str(path), 900_000, since_ms=800_000) == []
+
     def test_a_repeated_start_keeps_the_original_window(self, tmp_path: Any) -> None:
         path = tmp_path / "nagios.log"
         path.write_text(
@@ -1048,7 +1066,7 @@ class TestDowntimeHistory:
         assert lines[1].startswith("  ctr-grafana [host; Grafana port; HTTPS external]: ")
         assert lines[1].endswith("(15m) | josui: tig deploy; part 2")
         assert lines[2].startswith("  lotor [Host failed systemd units]: ")
-        assert lines[2].endswith("(10m, ongoing) | admin: restart")
+        assert lines[2].endswith("(1h 0m, ongoing) | admin: restart")
 
     @pytest.mark.usefixtures("nagios_log")
     async def test_history_host_filter(self) -> None:
