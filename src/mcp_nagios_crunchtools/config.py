@@ -34,6 +34,10 @@ class Config:
         # Set by the operator, never by the tool caller: the caller must not
         # choose whose name goes on the record.
         self._comment_author = os.environ.get("NAGIOS_COMMENT_AUTHOR") or username or "Hermes"
+        # Optional read-only path to nagios.log. archivejson.cgi never returns
+        # downtime start/stop entries (it reads them only for availability), so
+        # downtime history comes from the log itself.
+        self._log_path = os.environ.get("NAGIOS_LOG_PATH") or None
 
         logger.info("Configuration loaded successfully")
 
@@ -48,6 +52,10 @@ class Config:
     @property
     def comment_author(self) -> str:
         return self._comment_author
+
+    @property
+    def log_path(self) -> str | None:
+        return self._log_path
 
     @property
     def password(self) -> str:

@@ -7,6 +7,8 @@ MAX_HOSTNAME_LENGTH = 255
 MAX_SERVICE_DESC_LENGTH = 255
 # One month. The archive CGI returns every row in the range in one response.
 MAX_HISTORY_HOURS = 744
+MIN_DOWNTIME_MINUTES = 5
+MAX_DOWNTIME_MINUTES = 480
 
 
 class AcknowledgeInput(BaseModel):
@@ -28,6 +30,24 @@ class CommentInput(BaseModel):
 
 
 class ScheduleCheckInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host_name: str = Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)
+    service_description: str | None = Field(default=None, max_length=MAX_SERVICE_DESC_LENGTH)
+
+
+class DowntimeInput(BaseModel):
+    """A fixed downtime window starting now. Capped at 8h so a forgotten one expires."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host_name: str = Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)
+    service_description: str | None = Field(default=None, max_length=MAX_SERVICE_DESC_LENGTH)
+    comment: str = Field(min_length=1, max_length=MAX_COMMENT_LENGTH)
+    minutes: int = Field(ge=MIN_DOWNTIME_MINUTES, le=MAX_DOWNTIME_MINUTES)
+
+
+class CancelDowntimeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host_name: str = Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)

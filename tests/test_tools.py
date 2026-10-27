@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from mcp_nagios_crunchtools import client as client_mod
+from mcp_nagios_crunchtools import config as config_mod
 from mcp_nagios_crunchtools.config import Config
 from mcp_nagios_crunchtools.models import MAX_HISTORY_HOURS
 from mcp_nagios_crunchtools.server import mcp
@@ -19,19 +20,24 @@ from mcp_nagios_crunchtools.tools import (
     acknowledge,
     add_comment,
     alert_history,
+    cancel_downtime,
     current_problems,
+    downtime_history,
     host_status,
+    list_downtimes,
     notification_history,
     program_status,
     schedule_check,
+    schedule_downtime,
     service_status,
 )
 from mcp_nagios_crunchtools.tools import commands as commands_mod
+from mcp_nagios_crunchtools.tools import downtime as downtime_mod
 from mcp_nagios_crunchtools.tools import history as history_mod
 
 from .conftest import _mock_response, _patch_client
 
-TOOL_COUNT = 9
+TOOL_COUNT = 13
 
 READ_ONLY = frozenset(
     {
@@ -41,6 +47,8 @@ READ_ONLY = frozenset(
         "nagios_program_status_tool",
         "nagios_notification_history_tool",
         "nagios_alert_history_tool",
+        "nagios_list_downtimes_tool",
+        "nagios_downtime_history_tool",
     }
 )
 # Each of these submits a Nagios external command through cmd.cgi.
@@ -49,6 +57,8 @@ WRITES = frozenset(
         "nagios_acknowledge_tool",
         "nagios_add_comment_tool",
         "nagios_schedule_check_tool",
+        "nagios_schedule_downtime_tool",
+        "nagios_cancel_downtime_tool",
     }
 )
 
@@ -60,7 +70,10 @@ READ_ONLY_CALLS: dict[str, dict[str, Any]] = {
     "nagios_program_status_tool": {},
     "nagios_notification_history_tool": {"host_name": "web01", "hours": 1},
     "nagios_alert_history_tool": {"host_name": "web01", "hours": 1},
+    "nagios_list_downtimes_tool": {"host_name": "web01"},
 }
+# Reads nagios.log rather than a CGI, so it sends no request at all.
+FILE_READS = frozenset({"nagios_downtime_history_tool"})
 
 # One body that answers every statusjson.cgi / archivejson.cgi query the reads make.
 _ANY_QUERY_DATA: dict[str, Any] = {
@@ -71,6 +84,7 @@ _ANY_QUERY_DATA: dict[str, Any] = {
     "programstatus": {},
     "notificationlist": [],
     "alertlist": [],
+    "downtimelist": {},
 }
 
 
@@ -94,10 +108,12 @@ def _recording_client() -> Iterator[list[httpx.Request]]:
     cfg.status_cgi_url = "https://nagios.example.com/nagios/cgi-bin/statusjson.cgi"
     cfg.archive_cgi_url = "https://nagios.example.com/nagios/cgi-bin/archivejson.cgi"
     cfg.cmd_cgi_url = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
+    cfg.log_path = None
     nagios_client = client_mod.NagiosClient(cfg)
     nagios_client._client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
     client_mod._client = nagios_client
-    yield seen
+    with patch.object(config_mod, "get_config", return_value=cfg):
+        yield seen
 
 
 class TestReadOnlyAnnotation:
@@ -115,7 +131,7 @@ class TestReadOnlyAnnotation:
         }
         assert annotated == READ_ONLY
 
-    @pytest.mark.parametrize("name", sorted(READ_ONLY))
+    @pytest.mark.parametrize("name", sorted(READ_ONLY - FILE_READS))
     async def test_read_only_tool_only_sends_get(self, name: str) -> None:
         """A read never reaches cmd.cgi, which is how Nagios takes a command.
 
@@ -745,6 +761,265 @@ class TestAlertHistory:
         with _patch_client(response):
             result = await alert_history(hours=24)
         assert "No problem alerts" in result
+
+
+def _capturing_client(sent: list[tuple[int, dict[str, str]]]) -> MagicMock:
+    async def _capture(cmd_typ: int, form_data: dict[str, str]) -> str:
+        sent.append((cmd_typ, form_data))
+        return "Command submitted successfully"
+
+    client = MagicMock()
+    client.submit_command = _capture
+    return client
+
+
+class TestScheduleDowntime:
+    async def test_host_downtime_covers_the_host_and_its_services(self) -> None:
+        sent: list[tuple[int, dict[str, str]]] = []
+        with (
+            _patch_client(_mock_response(text="ok")),
+            patch.object(downtime_mod, "get_client", return_value=_capturing_client(sent)),
+        ):
+            result = await schedule_downtime("ctr-mcp-trove", 90, "Josui: deploying trove")
+        assert [cmd for cmd, _ in sent] == [
+            downtime_mod.CMD_SCHEDULE_HOST_DOWNTIME,
+            downtime_mod.CMD_SCHEDULE_HOST_SVC_DOWNTIME,
+        ]
+        form = sent[0][1]
+        assert form["host"] == "ctr-mcp-trove"
+        assert form["com_author"] == "josui"
+        assert form["fixed"] == "1"
+        assert (form["hours"], form["minutes"]) == ("1", "30")
+        assert "service" not in form
+        assert "and all its services" in result
+
+    async def test_service_downtime_names_the_service(self) -> None:
+        sent: list[tuple[int, dict[str, str]]] = []
+        with (
+            _patch_client(_mock_response(text="ok")),
+            patch.object(downtime_mod, "get_client", return_value=_capturing_client(sent)),
+        ):
+            await schedule_downtime("lotor", 30, "deploy", "Host failed systemd units")
+        assert len(sent) == 1
+        cmd, form = sent[0]
+        assert cmd == downtime_mod.CMD_SCHEDULE_SVC_DOWNTIME
+        assert form["service"] == "Host failed systemd units"
+
+    async def test_window_is_local_wall_clock(self) -> None:
+        sent: list[tuple[int, dict[str, str]]] = []
+        original_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        try:
+            with (
+                _patch_client(_mock_response(text="ok")),
+                patch.object(downtime_mod, "get_client", return_value=_capturing_client(sent)),
+            ):
+                await schedule_downtime("lotor", 60, "deploy", "HTTPS")
+            start = time.strftime("%m-%d-%Y %H:%M", time.localtime())
+            end = time.strftime("%m-%d-%Y %H:%M", time.localtime(time.time() + 3600))
+        finally:
+            if original_tz is None:
+                del os.environ["TZ"]
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+        assert sent[0][1]["start_time"][:16] == start
+        assert sent[0][1]["end_time"][:16] == end
+
+    @pytest.mark.parametrize("minutes", [4, 481])
+    async def test_length_is_bounded(self, minutes: int) -> None:
+        with pytest.raises(ValidationError):
+            await schedule_downtime("lotor", minutes, "deploy")
+
+    async def test_comment_is_required(self) -> None:
+        with pytest.raises(ValidationError):
+            await schedule_downtime("lotor", 30, "")
+
+
+def _downtime(down_id: int, host: str, author: str, service: str | None = None) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "downtime_id": down_id,
+        "host_name": host,
+        "author": author,
+        "comment": "deploy",
+        "start_time": 1700000000000,
+        "end_time": 1700003600000 + down_id,
+        "is_in_effect": True,
+    }
+    if service:
+        entry["service_description"] = service
+    return entry
+
+
+class TestListAndCancelDowntime:
+    async def test_list(self) -> None:
+        data = {"downtimelist": {"7": _downtime(7, "ctr-mcp-trove", "josui", "MCP port")}}
+        with _patch_client(_mock_response(json_data=_success_result(data))):
+            result = await list_downtimes()
+        assert "#7 ctr-mcp-trove / MCP port: in effect" in result
+        assert "josui: deploy" in result
+
+    async def test_list_empty(self) -> None:
+        data: dict[str, Any] = {"downtimelist": {}}
+        with _patch_client(_mock_response(json_data=_success_result(data))):
+            assert await list_downtimes("web01") == "No scheduled downtime for host 'web01'."
+
+    async def test_cancel_touches_only_our_downtime_on_that_host(self) -> None:
+        listing = {
+            "downtimelist": {
+                "1": _downtime(1, "ctr-mcp-trove", "josui"),
+                "2": _downtime(2, "ctr-mcp-trove", "josui", "MCP port"),
+                "3": _downtime(3, "ctr-mcp-trove", "admin", "Index run"),
+                "4": _downtime(4, "ctr-mcp-trove-other", "josui"),
+            }
+        }
+        sent: list[tuple[int, dict[str, str]]] = []
+        recorder = _capturing_client(sent)
+        with _patch_client(_mock_response(json_data=_success_result(listing))):
+            recorder.query_status = client_mod.get_client().query_status
+            with patch.object(downtime_mod, "get_client", return_value=recorder):
+                result = await cancel_downtime("ctr-mcp-trove")
+        assert sent == [
+            (downtime_mod.CMD_DEL_HOST_DOWNTIME, {"down_id": "1"}),
+            (downtime_mod.CMD_DEL_SVC_DOWNTIME, {"down_id": "2"}),
+        ]
+        assert "Cancelled 2 downtime(s)" in result
+
+    async def test_cancel_one_service(self) -> None:
+        listing = {
+            "downtimelist": {
+                "1": _downtime(1, "lotor", "josui"),
+                "2": _downtime(2, "lotor", "josui", "Host failed systemd units"),
+            }
+        }
+        sent: list[tuple[int, dict[str, str]]] = []
+        recorder = _capturing_client(sent)
+        with _patch_client(_mock_response(json_data=_success_result(listing))):
+            recorder.query_status = client_mod.get_client().query_status
+            with patch.object(downtime_mod, "get_client", return_value=recorder):
+                await cancel_downtime("lotor", "Host failed systemd units")
+        assert sent == [(downtime_mod.CMD_DEL_SVC_DOWNTIME, {"down_id": "2"})]
+
+    async def test_nothing_to_cancel(self) -> None:
+        listing = {"downtimelist": {"3": _downtime(3, "lotor", "admin")}}
+        with _patch_client(_mock_response(json_data=_success_result(listing))):
+            result = await cancel_downtime("lotor")
+        assert result == "No downtime by 'josui' to cancel on lotor."
+
+
+# Epoch seconds an hour ago, so every window falls inside a 24h history range.
+_T0 = int(time.time()) - 3600
+
+_GRAFANA = f"ctr-grafana;{_T0};{_T0 + 900};1;0;900;josui;tig deploy; part 2"
+_SYSTEMD = f"lotor;Host failed systemd units;{_T0 + 1000};{_T0 + 1600};1;0;600;admin;restart"
+_LOG = "\n".join(
+    f"[{ts}] {text}"
+    for ts, text in [
+        (_T0 - 10, "SERVICE ALERT: lotor;HTTPS;CRITICAL;HARD;3;refused"),
+        (_T0, f"EXTERNAL COMMAND: SCHEDULE_HOST_SVC_DOWNTIME;{_GRAFANA}"),
+        (_T0, f"EXTERNAL COMMAND: SCHEDULE_HOST_DOWNTIME;{_GRAFANA}"),
+        (_T0, "HOST DOWNTIME ALERT: ctr-grafana;STARTED; Host has entered ..."),
+        (_T0, "SERVICE DOWNTIME ALERT: ctr-grafana;Grafana port;STARTED; Service has ..."),
+        (_T0, "SERVICE DOWNTIME ALERT: ctr-grafana;HTTPS external;STARTED; Service has ..."),
+        (_T0 + 600, "SERVICE DOWNTIME ALERT: ctr-grafana;Grafana port;STOPPED; Service ..."),
+        (_T0 + 700, "SERVICE DOWNTIME ALERT: ctr-grafana;HTTPS external;CANCELLED; ..."),
+        (_T0 + 900, "HOST DOWNTIME ALERT: ctr-grafana;STOPPED; Host has exited ..."),
+        (_T0 + 1000, f"EXTERNAL COMMAND: SCHEDULE_SVC_DOWNTIME;{_SYSTEMD}"),
+        (_T0 + 1000, "SERVICE DOWNTIME ALERT: lotor;Host failed systemd units;STARTED; ..."),
+    ]
+)
+
+
+@pytest.fixture
+def nagios_log(tmp_path: Any) -> Iterator[str]:
+    path = tmp_path / "nagios.log"
+    path.write_text(_LOG)
+    cfg = MagicMock()
+    cfg.log_path = str(path)
+    with patch.object(config_mod, "get_config", return_value=cfg):
+        yield str(path)
+
+
+class TestDowntimeHistory:
+    def test_windows_are_rebuilt_from_the_log(self, nagios_log: str) -> None:
+        windows = {w.label: w for w in downtime_mod._read_windows(nagios_log, (_T0 + 1200) * 1000)}
+        assert set(windows) == {
+            "ctr-grafana",
+            "ctr-grafana / Grafana port",
+            "ctr-grafana / HTTPS external",
+            "lotor / Host failed systemd units",
+        }
+        port = windows["ctr-grafana / Grafana port"]
+        assert (port.start, port.end) == (_T0 * 1000, (_T0 + 600) * 1000)
+        # The service window takes its reason from SCHEDULE_HOST_SVC_DOWNTIME,
+        # and a ';' inside the comment survives.
+        assert (port.author, port.comment) == ("josui", "tig deploy; part 2")
+        assert windows["ctr-grafana / HTTPS external"].end == (_T0 + 700) * 1000
+        # Still open: ongoing, and keeps its scheduled end rather than now.
+        systemd = windows["lotor / Host failed systemd units"]
+        assert (systemd.end, systemd.ongoing) == ((_T0 + 1600) * 1000, True)
+        assert not port.ongoing
+
+    def test_unreadable_log_names_the_setting(self, tmp_path: Any) -> None:
+        with pytest.raises(Exception, match="NAGIOS_LOG_PATH"):
+            downtime_mod._read_windows(str(tmp_path / "missing.log"), 0)
+
+    @pytest.mark.usefixtures("nagios_log")
+    async def test_history_groups_one_scheduling_per_line(self) -> None:
+        lines = (await downtime_history(hours=24)).splitlines()
+        assert lines[0] == "Downtime windows (last 24h), 2 scheduling(s):"
+        assert lines[1].startswith("  ctr-grafana [host; Grafana port; HTTPS external]: ")
+        assert lines[1].endswith("(15m) | josui: tig deploy; part 2")
+        assert lines[2].startswith("  lotor [Host failed systemd units]: ")
+        assert lines[2].endswith("(10m, ongoing) | admin: restart")
+
+    @pytest.mark.usefixtures("nagios_log")
+    async def test_history_host_filter(self) -> None:
+        result = await downtime_history(host_name="lotor", hours=24)
+        assert "ctr-grafana" not in result
+
+    async def test_history_needs_the_log(self) -> None:
+        cfg = MagicMock()
+        cfg.log_path = None
+        with (
+            patch.object(config_mod, "get_config", return_value=cfg),
+            pytest.raises(Exception, match="NAGIOS_LOG_PATH"),
+        ):
+            await downtime_history()
+
+    async def test_alert_history_sets_planned_work_aside(self, nagios_log: str) -> None:
+        def _at(epoch: int, host: str, service: str) -> dict[str, Any]:
+            return {
+                "timestamp": epoch * 1000,
+                "object_type": 2,
+                "host_name": host,
+                "description": service,
+                "state_type": 1,
+                "state": 32,
+                "plugin_output": "CRITICAL - refused",
+            }
+
+        alerts = [
+            _at(_T0 - 10, "lotor", "HTTPS"),
+            _at(_T0 + 60, "ctr-grafana", "Grafana port"),
+            _at(_T0 + 120, "ctr-grafana", "Grafana port"),
+            _at(_T0 + 650, "ctr-grafana", "Grafana port"),
+        ]
+        response = _mock_response(json_data=_success_result({"alertlist": alerts}))
+        with (
+            _patch_client(response),
+            patch.object(config_mod, "get_config", return_value=MagicMock(log_path=nagios_log)),
+        ):
+            lines = (await alert_history(hours=24)).splitlines()
+        assert "2 host(s)/service(s)" in lines[0]
+        # One unplanned event each: the two before and after the window.
+        assert sorted(line.split(":")[0] for line in lines[1:3]) == [
+            "  ctr-grafana / Grafana port",
+            "  lotor / HTTPS",
+        ]
+        assert all(": 1 problem event(s)" in line for line in lines[1:3])
+        assert lines[-1] == ("  plus 2 event(s) on 1 host(s)/service(s) during scheduled downtime")
 
 
 async def test_tool_count() -> None:
