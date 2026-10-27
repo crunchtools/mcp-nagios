@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-26
+
+### Added
+
+- `nagios_schedule_downtime` puts a host and all its services, or one service,
+  into fixed downtime starting now, for 5 to 480 minutes, before planned work
+  makes checks fail. `nagios_list_downtimes` shows what is in effect or pending,
+  and `nagios_cancel_downtime` ends this server's own downtime (never another
+  author's) when the work is done.
+- `nagios_downtime_history` lists past and current downtime windows with their
+  author and comment. archivejson.cgi never returns downtime entries, so this
+  reads `nagios.log` from the new optional `NAGIOS_LOG_PATH`.
+- `nagios_host_status` and `nagios_service_status` report `In Downtime`.
+
+### Changed
+
+- `nagios_alert_history` leaves problems raised inside a downtime window for
+  that object out of the per-object lines and totals them on a final "plus N
+  event(s) ... during scheduled downtime" line, so planned work stops ranking as
+  noise. Without `NAGIOS_LOG_PATH` it behaves as before.
+
+### Removed
+
+- A stray `tools/history.py.conflict1` left over from a merge.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added

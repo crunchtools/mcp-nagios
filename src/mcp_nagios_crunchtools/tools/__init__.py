@@ -1,6 +1,7 @@
 """Nagios MCP tools."""
 
 from .commands import acknowledge, add_comment, schedule_check
+from .downtime import cancel_downtime, downtime_history, list_downtimes, schedule_downtime
 from .history import alert_history, notification_history
 from .status import current_problems, host_status, program_status, service_status
 
@@ -12,6 +13,10 @@ __all__ = [
     "acknowledge",
     "add_comment",
     "schedule_check",
+    "schedule_downtime",
+    "list_downtimes",
+    "cancel_downtime",
+    "downtime_history",
     "notification_history",
     "alert_history",
 ]

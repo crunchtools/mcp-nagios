@@ -39,6 +39,7 @@ async def host_status(host_name: str) -> str:
         f"Next Check: {_format_timestamp(host.get('next_check', 0))}",
         f"Attempt: {host.get('current_attempt', 0)}/{host.get('max_attempts', 0)}",
         f"Last State Change: {_format_timestamp(host.get('last_state_change', 0))}",
+        f"In Downtime: {host.get('scheduled_downtime_depth', 0) > 0}",
     ]
     return "\n".join(lines)
 
@@ -68,6 +69,7 @@ async def service_status(host_name: str, service_description: str) -> str:
         f"Attempt: {svc.get('current_attempt', 0)}/{svc.get('max_attempts', 0)}",
         f"Last State Change: {_format_timestamp(svc.get('last_state_change', 0))}",
         f"Acknowledged: {svc.get('problem_has_been_acknowledged', False)}",
+        f"In Downtime: {svc.get('scheduled_downtime_depth', 0) > 0}",
     ]
     return "\n".join(lines)
 

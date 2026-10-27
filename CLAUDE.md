@@ -16,8 +16,9 @@ NAGIOS_URL=https://nagios.example.com NAGIOS_USER=admin NAGIOS_PASS=secret uv ru
 - `NAGIOS_PASS` (required) — HTTP Basic Auth password
 - `NAGIOS_COMMENT_AUTHOR` (optional) — author on acknowledgements/comments; defaults to `NAGIOS_USER`
 - `NAGIOS_CGI_PREFIX` (optional) — CGI path under `NAGIOS_URL`; defaults to `/nagios/cgi-bin`
+- `NAGIOS_LOG_PATH` (optional) — read-only `nagios.log`; enables downtime history and the planned-work split in alert history
 
-## Tools (9)
+## Tools (13)
 
 ### Status
 - `nagios_host_status` — query host status
@@ -29,10 +30,14 @@ NAGIOS_URL=https://nagios.example.com NAGIOS_USER=admin NAGIOS_PASS=secret uv ru
 - `nagios_acknowledge` — acknowledge a problem
 - `nagios_add_comment` — add comment to host/service
 - `nagios_schedule_check` — force immediate re-check
+- `nagios_schedule_downtime` — fixed downtime from now, before planned work
+- `nagios_list_downtimes` — downtime in effect or pending
+- `nagios_cancel_downtime` — end this server's own downtime
 
 ### History
 - `nagios_notification_history` — recent notifications
-- `nagios_alert_history` — state changes rolled up per host/service, including warnings and self-recovered problems
+- `nagios_alert_history` — state changes rolled up per host/service, including warnings and self-recovered problems; downtime events totalled separately
+- `nagios_downtime_history` — past and current downtime windows, from `nagios.log`
 
 ## Dev Commands
 

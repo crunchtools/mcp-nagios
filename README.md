@@ -17,6 +17,7 @@ uvx mcp-nagios-crunchtools
 | `NAGIOS_PASS` | Yes | HTTP Basic Auth password |
 | `NAGIOS_COMMENT_AUTHOR` | No | Author recorded on acknowledgements and comments. Defaults to `NAGIOS_USER`. Not a tool parameter. |
 | `NAGIOS_CGI_PREFIX` | No | Path under `NAGIOS_URL` where the CGI scripts are served. Defaults to `/nagios/cgi-bin`. Set to `/cgi-bin` for a Nagios served at the web root. A trailing slash is ignored. |
+| `NAGIOS_LOG_PATH` | No | Read-only path to `nagios.log`. Enables `nagios_downtime_history` and the planned-work split in `nagios_alert_history`; archivejson.cgi never returns downtime entries. |
 | `TZ` | Effectively yes | The container's local timezone. Must match the Nagios server's own timezone. |
 
 ### Why `TZ` matters
@@ -43,8 +44,12 @@ it introduced is why `TZ` belongs in this table rather than being left implicit.
 | `nagios_acknowledge` | Acknowledge a host or service problem |
 | `nagios_add_comment` | Add a comment to a host or service |
 | `nagios_schedule_check` | Force an immediate re-check |
+| `nagios_schedule_downtime` | Fixed downtime from now (5–480 min) on a host and its services, or one service, before planned work |
+| `nagios_list_downtimes` | Downtime in effect or pending |
+| `nagios_cancel_downtime` | End this server's own downtime when the work is done |
+| `nagios_downtime_history` | Past and current downtime windows with author and comment, from `nagios.log` |
 | `nagios_notification_history` | Recent notifications |
-| `nagios_alert_history` | State changes rolled up per host/service, including warnings and problems that recovered by themselves |
+| `nagios_alert_history` | State changes rolled up per host/service, including warnings and problems that recovered by themselves; problems during scheduled downtime are totalled separately |
 
 ## License
 

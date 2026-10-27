@@ -10,16 +10,26 @@ from pydantic import Field
 
 from . import __version__
 from .client import close_client
-from .models import MAX_HISTORY_HOURS, MAX_HOSTNAME_LENGTH, MAX_SERVICE_DESC_LENGTH
+from .models import (
+    MAX_DOWNTIME_MINUTES,
+    MAX_HISTORY_HOURS,
+    MAX_HOSTNAME_LENGTH,
+    MAX_SERVICE_DESC_LENGTH,
+    MIN_DOWNTIME_MINUTES,
+)
 from .tools import (
     acknowledge,
     add_comment,
     alert_history,
+    cancel_downtime,
     current_problems,
+    downtime_history,
     host_status,
+    list_downtimes,
     notification_history,
     program_status,
     schedule_check,
+    schedule_downtime,
     service_status,
 )
 
@@ -30,6 +40,7 @@ HostName = Annotated[str, Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)]
 OptionalHostName = Annotated[str | None, Field(min_length=1, max_length=MAX_HOSTNAME_LENGTH)]
 ServiceDescription = Annotated[str, Field(min_length=1, max_length=MAX_SERVICE_DESC_LENGTH)]
 Hours = Annotated[int, Field(ge=1, le=MAX_HISTORY_HOURS)]
+Minutes = Annotated[int, Field(ge=MIN_DOWNTIME_MINUTES, le=MAX_DOWNTIME_MINUTES)]
 
 # A gateway drops an invalid optional argument only on a tool annotated read-only;
 # on anything else it refuses the call. Only tools that change nothing in Nagios
@@ -54,7 +65,10 @@ mcp = FastMCP(
     instructions=(
         "MCP server for Nagios Core monitoring. Query host and service status, "
         "acknowledge problems, add comments, schedule forced checks, and "
-        "read notification and alert history. Notifications only fire on what "
+        "read notification and alert history. Before planned work that will make "
+        "checks fail (a deploy, a restart, a long work session), schedule downtime "
+        "with nagios_schedule_downtime_tool and cancel it when done, so the work "
+        "neither pages nor counts as noise. Notifications only fire on what "
         "Nagios is configured to page for; nagios_alert_history_tool shows every "
         "state change, including warnings and problems that recovered by "
         "themselves. To check whether Nagios ITSELF is alive and "
@@ -192,6 +206,84 @@ async def nagios_schedule_check_tool(
     return await schedule_check(host_name, service_description)
 
 
+@mcp.tool()
+async def nagios_schedule_downtime_tool(
+    host_name: str,
+    minutes: Minutes,
+    comment: str,
+    service_description: str | None = None,
+) -> str:
+    """Schedule fixed downtime starting now, before planned work makes checks fail.
+
+    Notifications stop for the window, and alert history counts problems inside
+    it as planned work rather than noise. Cancel it with
+    nagios_cancel_downtime_tool when the work is done.
+
+    Args:
+        host_name: The host. Without service_description, the host and every
+            service on it go into downtime.
+        minutes: Length of the window, 5 to 480. It expires on its own.
+        comment: What the work is and why, e.g. 'Josui: deploying mcp-trove 1.0.7 (RT #1550)'.
+        service_description: One service to put into downtime instead of the whole host.
+
+    Returns:
+        Confirmation with the window's end time.
+    """
+    return await schedule_downtime(host_name, minutes, comment, service_description)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def nagios_list_downtimes_tool(host_name: OptionalHostName = None) -> str:
+    """List scheduled downtime that is in effect or still to come.
+
+    Args:
+        host_name: Filter to a specific host. Omit for all hosts.
+
+    Returns:
+        One line per downtime: id, host or service, in effect or pending,
+        start and end, author and comment.
+    """
+    return await list_downtimes(host_name)
+
+
+@mcp.tool()
+async def nagios_cancel_downtime_tool(
+    host_name: str,
+    service_description: str | None = None,
+) -> str:
+    """End downtime this server scheduled, once the planned work is done.
+
+    Only downtime recorded under this server's own author is cancelled.
+
+    Args:
+        host_name: The host. Without service_description, its host and service
+            downtimes are all cancelled.
+        service_description: Cancel only this service's downtime.
+
+    Returns:
+        What was cancelled, or that there was nothing to cancel.
+    """
+    return await cancel_downtime(host_name, service_description)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def nagios_downtime_history_tool(
+    host_name: OptionalHostName = None,
+    hours: Hours = 168,
+) -> str:
+    """List past and current downtime windows, read from nagios.log.
+
+    Args:
+        host_name: Filter to a specific host. Omit for all hosts.
+        hours: How many hours back to look, 1 to 744. Default 168 (one week).
+
+    Returns:
+        One line per scheduling: host, the objects it covered, start, end,
+        length, author and comment.
+    """
+    return await downtime_history(host_name, hours)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def nagios_notification_history_tool(
     host_name: OptionalHostName = None,
@@ -226,6 +318,8 @@ async def nagios_alert_history_tool(
     Returns:
         One line per host or service that had a problem: how many times, in
         which states, first and last time, the last state seen, and the last
-        problem output. Noisiest first.
+        problem output. Noisiest first. Problems inside a scheduled downtime
+        window are left out of those lines and totalled on a final "plus N
+        event(s) ... during scheduled downtime" line.
     """
     return await alert_history(host_name, hours)

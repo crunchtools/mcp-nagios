@@ -59,6 +59,8 @@ def _patch_client(*responses: httpx.Response) -> Iterator[None]:
     cfg.status_cgi_url = "https://nagios.example.com/nagios/cgi-bin/statusjson.cgi"
     cfg.archive_cgi_url = "https://nagios.example.com/nagios/cgi-bin/archivejson.cgi"
     cfg.cmd_cgi_url = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
+    cfg.comment_author = "josui"
+    cfg.log_path = None
     with patch.object(config_mod, "get_config", return_value=cfg):
         mock_http = AsyncMock(spec=httpx.AsyncClient)
         if len(responses) == 1:
