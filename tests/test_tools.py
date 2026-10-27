@@ -961,6 +961,55 @@ class TestDowntimeHistory:
         assert (systemd.end, systemd.ongoing) == ((_T0 + 1600) * 1000, True)
         assert not port.ongoing
 
+    def test_range_keeps_windows_that_overlap_it(self, tmp_path: Any) -> None:
+        path = tmp_path / "nagios.log"
+        path.write_text(
+            "\n".join(
+                [
+                    "[100] SERVICE DOWNTIME ALERT: h;before;STARTED; x",
+                    "[200] SERVICE DOWNTIME ALERT: h;before;STOPPED; x",
+                    "[300] SERVICE DOWNTIME ALERT: h;spanning;STARTED; x",
+                    "[600] SERVICE DOWNTIME ALERT: h;spanning;STOPPED; x",
+                    "[700] SERVICE DOWNTIME ALERT: h;after;STARTED; x",
+                    "[800] SERVICE DOWNTIME ALERT: h;after;CANCELLED; x",
+                ]
+            )
+        )
+        windows = downtime_mod._read_windows(str(path), 900_000, since_ms=500_000)
+        assert sorted(w.service or "" for w in windows) == ["after", "spanning"]
+
+    async def test_one_scheduling_logged_across_seconds_is_one_line(self, tmp_path: Any) -> None:
+        cmd = f"ctr-x;{_T0};{_T0 + 600};1;0;600;josui;deploy"
+        path = tmp_path / "nagios.log"
+        path.write_text(
+            "\n".join(
+                [
+                    f"[{_T0}] EXTERNAL COMMAND: SCHEDULE_HOST_DOWNTIME;{cmd}",
+                    f"[{_T0}] HOST DOWNTIME ALERT: ctr-x;STARTED; x",
+                    f"[{_T0 + 1}] EXTERNAL COMMAND: SCHEDULE_HOST_SVC_DOWNTIME;{cmd}",
+                    f"[{_T0 + 1}] SERVICE DOWNTIME ALERT: ctr-x;MCP port;STARTED; x",
+                ]
+            )
+        )
+        with patch.object(config_mod, "get_config", return_value=MagicMock(log_path=str(path))):
+            lines = (await downtime_history(hours=24)).splitlines()
+        assert lines[0].endswith("1 scheduling(s):")
+        assert lines[1].startswith("  ctr-x [host; MCP port]: ")
+
+    def test_a_repeated_start_keeps_the_original_window(self, tmp_path: Any) -> None:
+        path = tmp_path / "nagios.log"
+        path.write_text(
+            "\n".join(
+                [
+                    "[100] SERVICE DOWNTIME ALERT: h;svc;STARTED; x",
+                    "[150] SERVICE DOWNTIME ALERT: h;svc;STARTED; x",
+                    "[200] SERVICE DOWNTIME ALERT: h;svc;STOPPED; x",
+                ]
+            )
+        )
+        windows = downtime_mod._read_windows(str(path), 900_000)
+        assert [(w.start, w.end) for w in windows] == [(100_000, 200_000)]
+
     def test_unreadable_log_names_the_setting(self, tmp_path: Any) -> None:
         with pytest.raises(Exception, match="NAGIOS_LOG_PATH"):
             downtime_mod._read_windows(str(tmp_path / "missing.log"), 0)
@@ -1019,7 +1068,28 @@ class TestDowntimeHistory:
             "  lotor / HTTPS",
         ]
         assert all(": 1 problem event(s)" in line for line in lines[1:3])
-        assert lines[-1] == ("  plus 2 event(s) on 1 host(s)/service(s) during scheduled downtime")
+        assert lines[-1] == "  plus 2 event(s) on 1 host(s)/service(s) during scheduled downtime"
+
+    async def test_alert_history_when_every_problem_was_planned(self, nagios_log: str) -> None:
+        alert = {
+            "timestamp": (_T0 + 60) * 1000,
+            "object_type": 2,
+            "host_name": "ctr-grafana",
+            "description": "Grafana port",
+            "state_type": 1,
+            "state": 32,
+            "plugin_output": "CRITICAL - refused",
+        }
+        response = _mock_response(json_data=_success_result({"alertlist": [alert]}))
+        with (
+            _patch_client(response),
+            patch.object(config_mod, "get_config", return_value=MagicMock(log_path=nagios_log)),
+        ):
+            result = await alert_history(hours=24)
+        assert result == (
+            "No problem alerts in the last 24 hour(s).\n"
+            "  plus 1 event(s) on 1 host(s)/service(s) during scheduled downtime"
+        )
 
 
 async def test_tool_count() -> None:

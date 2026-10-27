@@ -47,6 +47,14 @@ class DowntimeInput(BaseModel):
     minutes: int = Field(ge=MIN_DOWNTIME_MINUTES, le=MAX_DOWNTIME_MINUTES)
 
 
+class ListDowntimesInput(BaseModel):
+    """Listing scheduled downtime, optionally only for one host."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host_name: str | None = Field(default=None, min_length=1, max_length=MAX_HOSTNAME_LENGTH)
+
+
 class CancelDowntimeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

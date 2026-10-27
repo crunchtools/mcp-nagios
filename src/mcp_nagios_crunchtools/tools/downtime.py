@@ -10,7 +10,7 @@ from typing import Any
 from .. import config
 from ..client import _format_age, _format_timestamp, get_client
 from ..errors import ConfigurationError
-from ..models import CancelDowntimeInput, DowntimeInput, HistoryInput
+from ..models import CancelDowntimeInput, DowntimeInput, HistoryInput, ListDowntimesInput
 
 CMD_SCHEDULE_HOST_DOWNTIME = 55
 CMD_SCHEDULE_SVC_DOWNTIME = 56
@@ -23,7 +23,6 @@ CMD_SCHEDULE_HOST_SVC_DOWNTIME = 86
 ALL_SERVICES = "*"
 # host;start;end;fixed;trigger;duration;author;comment
 SCHEDULE_FIELDS = 8
-MS_PER_MINUTE = 60_000
 
 _LOG_LINE = re.compile(r"^\[(\d+)\] (.*)$")
 _SCHEDULE = re.compile(r"^EXTERNAL COMMAND: (SCHEDULE_(?:HOST|SVC|HOST_SVC)_DOWNTIME);(.*)$")
@@ -105,9 +104,8 @@ def _label(entry: dict[str, Any]) -> str:
 
 async def list_downtimes(host_name: str | None = None) -> str:
     """List scheduled downtimes that are active or still to come."""
-    if host_name is not None:
-        HistoryInput(host_name=host_name, hours=1)
-    entries = await _downtimes(host_name)
+    params = ListDowntimesInput(host_name=host_name)
+    entries = await _downtimes(params.host_name)
     if not entries:
         scope = f" for host '{host_name}'" if host_name else ""
         return f"No scheduled downtime{scope}."
@@ -168,6 +166,10 @@ class Window:
     author: str
     comment: str
     ongoing: bool = False
+    # The end time the SCHEDULE_*_DOWNTIME command asked for, 0 if unknown. The
+    # host and service commands of one scheduling share it, whatever second each
+    # was logged in, so it identifies the scheduling.
+    scheduled_end: int = 0
 
 
 ObjectKey = tuple[str, str | None]
@@ -243,6 +245,7 @@ class _WindowBuilder:
             end=planned_end or None,
             author=author,
             comment=comment,
+            scheduled_end=planned_end,
         )
 
     def finish(self, now_ms: int) -> list[Window]:
@@ -295,15 +298,17 @@ async def downtime_history(host_name: str | None = None, hours: int = 168) -> st
         return f"No scheduled downtime in the last {hours} hour(s){scope}."
 
     # One scheduling covers a host and each of its services; group them back
-    # together by host, author, comment and the minute it started.
+    # together by host, author, comment and the end the commands asked for. A
+    # window with no logged command falls back to its own start.
     groups: dict[tuple[str, str, str, int], list[Window]] = {}
     for window in sorted(windows, key=lambda w: w.start):
-        groups.setdefault(
-            (window.host, window.author, window.comment, window.start // MS_PER_MINUTE), []
-        ).append(window)
+        scheduling = window.scheduled_end or window.start
+        groups.setdefault((window.host, window.author, window.comment, scheduling), []).append(
+            window
+        )
 
     lines = [f"Downtime windows (last {hours}h), {len(groups)} scheduling(s):"]
-    for (host, author, comment, _minute), members in groups.items():
+    for (host, author, comment, _scheduling), members in groups.items():
         start = min(w.start for w in members)
         end = max(w.end or start for w in members)
         ordered = sorted(members, key=lambda w: (w.service is not None, w.service or ""))
