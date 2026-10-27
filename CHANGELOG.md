@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-26
+
+### Fixed
+
+- `nagios_downtime_history` no longer reports a window as ongoing when its
+  scheduled end has passed but the log has no STOPPED for it, which happens
+  when Nagios restarts inside the window.
+
 ## [0.8.0] - 2026-10-26
 
 ### Added
