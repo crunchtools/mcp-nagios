@@ -78,3 +78,14 @@ check = "manifest_lint_suppression"
 path = "pyproject.toml"
 justification = "Two global ignores remain, both measured and both package-wide. TRY003 (4 hits) covers exception messages built at the raise site rather than inside the exception class, which is this project's convention for surfacing Nagios CGI errors. TID252 (13 hits) covers the package's own internal relative imports. The other eight entries were either deleted outright as dead (PIE790, PLR0913), fixed in code (PLR2004), or narrowed to per-file-ignores (S101, S105, PLC0415, PLW0603, RUF022)."
 classification = "by_design"
+
+# Ruff is not missing; it moved. Gourmand's IF001 looks for a literal
+# `ruff-check` hook id, and under python-sdlc (constitution XII, v1.30.0) ruff
+# runs inside the `sdlc-commit` hook, configured by [tool.ruff] in
+# pyproject.toml. Same precedent as trentina.
+[[exceptions]]
+check = "linter_configuration"
+path = ".pre-commit-config.yaml"
+pattern = "ruff-check"
+justification = "ruff runs inside the sdlc-commit hook from python-sdlc (constitution XII v1.30.0), configured by [tool.ruff] in pyproject.toml; Gourmand looks for a literal ruff hook id"
+classification = "by_design"
