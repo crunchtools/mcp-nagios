@@ -94,8 +94,3 @@ skip = ["semgrep"]
 [tool.sdlc.push.pytest]
 env = { NAGIOS_URL = "https://nagios.example.com", NAGIOS_USER = "test_user", NAGIOS_PASS = "test_pass" }
 
-[tool.sdlc.ci]
-# The CodeQL Action job uploads to the Security tab and annotates new
-# alerts on the pull request, so CI does not analyse a second time.
-# The push tier still gates on it.
-skip = ["codeql"]
