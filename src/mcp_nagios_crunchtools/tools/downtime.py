@@ -289,11 +289,14 @@ async def cancel_downtime(host_name: str, service_description: str | None = None
     # host. In steady state every window this server opens has an ASCII
     # comment, so an unrenderable one was opened by a person -- exactly the
     # window the filter exists to leave alone. Name it and leave it.
+    # The ids are only known to be on this host: an entry Nagios will not
+    # render names neither its service nor its author, so whether it is even
+    # the window asked for is unknown. Say that rather than claim a match.
     blocked = (
-        f" Left {len(listing.unreadable)} alone "
+        f" Left {len(listing.unreadable)} alone on '{params.host_name}' "
         f"({', '.join(f'#{i}' for i in listing.unreadable)}): Nagios cannot render "
-        "the entry, so its author cannot be checked. nagios_downtime_history names "
-        "who opened it, and the Nagios web UI can end it."
+        "the entry, so neither its service nor its author can be checked. "
+        "nagios_downtime_history names who opened it, and the Nagios web UI can end it."
         if listing.unreadable
         else ""
     )

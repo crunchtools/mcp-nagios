@@ -1,0 +1,20 @@
+# Gatehouse findings judged by a maintainer. One block per finding, matched on
+# its evidence. A finding with no block here fails the CI triage.
+
+[[findings]]
+agent = "performance"
+category = "performance"
+file = "src/mcp_nagios_crunchtools/tools/downtime.py"
+evidence = "details = await asyncio.gather(*(_detail(entry_id) for entry_id in ids))"
+status = "not-a-bug"
+reason = """
+There is no batched detail API to use. statusjson.cgi offers exactly two
+queries that carry downtime fields: downtimelist&details=true, which IS the
+batch read and is the one that crashes, and downtime&downtimeid=N. Verified
+against the live 4.5.9 CGI. This path runs only after the batch read has
+already crashed, so the linear CGI reads buy back a listing that would
+otherwise be a bare HTTP 500, and they are bounded to DETAIL_FETCH_LIMIT at a
+time. Downtime lists are single-digit in practice and the window count is
+capped by MAX_DOWNTIME_MINUTES expiry, so the task-per-id cost is noise next
+to one CGI fork. Paying N+1 in the degraded path is the point of the change.
+"""

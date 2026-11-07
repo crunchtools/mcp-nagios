@@ -953,14 +953,14 @@ class TestDowntimeListSurvivesACrashedEntry:
         assert "Cancelled 1 downtime(s)" in result
         # The author guard cannot clear an entry Nagios will not describe, and
         # in steady state that entry is a person's. Say so; do not cancel it.
-        assert "Left 1 alone (#8)" in result
+        assert "Left 1 alone on 'ctr-mcp-trove' (#8)" in result
 
     async def test_cancel_reports_the_unreadable_entry_when_nothing_matched(self) -> None:
         readable = _downtime(7, "lotor", "admin")
         with _patch_crashing_client([7, 8], {7: readable}):
             result = await cancel_downtime("lotor")
         assert result.startswith("No downtime by 'josui' to cancel on lotor.")
-        assert "Left 1 alone (#8)" in result
+        assert "Left 1 alone on 'lotor' (#8)" in result
 
     async def test_cancel_scopes_the_id_list_to_the_host_not_the_service(self) -> None:
         """A host-scoped cancel has to see the host's own window too.
