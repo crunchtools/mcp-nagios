@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `nagios_list_downtimes` and `nagios_cancel_downtime` survive a downtime
+  entry whose stored comment crashes Nagios' `statusjson.cgi`. When the
+  details query answers HTTP 500, the list is read as ids
+  (`details=false`, which never crashes) and each id is fetched alone, so an
+  unrenderable entry costs only itself. The list names it; cancel leaves it
+  alone, since its author cannot be read, and names it too.
+  (crunchtools/mcp-nagios#65)
+
 ## [0.9.0] - 2026-11-07
 
 ### Fixed

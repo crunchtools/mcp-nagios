@@ -9,7 +9,7 @@ from typing import Any
 
 from .. import config
 from ..client import HTTP_INTERNAL_ERROR, _format_age, _format_timestamp, get_client
-from ..errors import ConfigurationError, NagiosApiError, NagiosCgiCrashError
+from ..errors import ConfigurationError, NagiosApiError, NagiosCgiCrashError, NagiosQueryError
 from ..models import CancelDowntimeInput, DowntimeInput, HistoryInput, ListDowntimesInput
 
 CMD_SCHEDULE_HOST_DOWNTIME = 55
@@ -82,22 +82,76 @@ async def schedule_downtime(
     )
 
 
-async def _downtimes(host_name: str | None) -> list[dict[str, Any]]:
-    """Current and future downtimes from statusjson.cgi, soonest end first."""
+async def _downtimes_by_id(host_name: str | None) -> tuple[list[dict[str, Any]], list[str]]:
+    """Read downtime one id at a time, for when the details query crashes the CGI.
+
+    `details=false` renders no stored string, so it always answers. Each id is
+    then fetched alone, which confines a crash to the entry that holds the
+    unrenderable comment. Returns the readable entries and the ids that crashed.
+    """
+    client = get_client()
+    query = {"query": "downtimelist", "details": "false"}
+    if host_name:
+        query["hostname"] = host_name
+    try:
+        response = await client.query_status(query)
+    except NagiosApiError as error:
+        if error.code == HTTP_INTERNAL_ERROR:
+            raise NagiosCgiCrashError("downtimelist") from error
+        raise
+    raw = response["data"].get("downtimelist", [])
+    ids = list(raw) if isinstance(raw, list) else list(raw.keys())
+    entries: list[dict[str, Any]] = []
+    unreadable: list[str] = []
+    for down_id in ids:
+        try:
+            one = await client.query_status({"query": "downtime", "downtimeid": str(down_id)})
+        except NagiosApiError as error:
+            if error.code != HTTP_INTERNAL_ERROR:
+                raise
+            unreadable.append(str(down_id))
+            continue
+        except NagiosQueryError:
+            # Nagios no longer holds this id: it ended between the two requests.
+            continue
+        entry = one["data"].get("downtime")
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries, unreadable
+
+
+async def _downtimes(host_name: str | None) -> tuple[list[dict[str, Any]], list[str]]:
+    """Current and future downtimes from statusjson.cgi, soonest end first.
+
+    Also returns the ids of entries the CGI could not render (empty unless a
+    stored comment crashes it).
+    """
     query = {"query": "downtimelist", "details": "true"}
     if host_name:
         query["hostname"] = host_name
     try:
         response = await get_client().query_status(query)
     except NagiosApiError as error:
-        if error.code == HTTP_INTERNAL_ERROR:
-            raise NagiosCgiCrashError("downtimelist") from error
-        raise
-    raw = response["data"].get("downtimelist", {})
-    entries = list(raw.values()) if isinstance(raw, dict) else list(raw)
-    return sorted(
+        if error.code != HTTP_INTERNAL_ERROR:
+            raise
+        entries, unreadable = await _downtimes_by_id(host_name)
+    else:
+        raw = response["data"].get("downtimelist", {})
+        entries = list(raw.values()) if isinstance(raw, dict) else list(raw)
+        unreadable = []
+    ordered = sorted(
         (entry for entry in entries if isinstance(entry, dict)),
         key=lambda entry: entry.get("end_time", 0),
+    )
+    return ordered, unreadable
+
+
+def _unreadable_note(unreadable: list[str]) -> str:
+    ids = ", ".join(f"#{down_id}" for down_id in unreadable)
+    return (
+        f"Could not render downtime {ids}: Nagios' JSON CGI crashes on it, "
+        "usually a stored comment holding a character outside ASCII. "
+        "nagios_downtime_history still shows it; it clears when it expires."
     )
 
 
@@ -110,9 +164,11 @@ def _label(entry: dict[str, Any]) -> str:
 async def list_downtimes(host_name: str | None = None) -> str:
     """List scheduled downtimes that are active or still to come."""
     params = ListDowntimesInput(host_name=host_name)
-    entries = await _downtimes(params.host_name)
+    entries, unreadable = await _downtimes(params.host_name)
     if not entries:
         scope = f" for host '{host_name}'" if host_name else ""
+        if unreadable:
+            return f"No readable downtime{scope}. " + _unreadable_note(unreadable)
         return f"No scheduled downtime{scope}."
 
     lines = [f"Scheduled downtime, {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}:"]
@@ -124,6 +180,8 @@ async def list_downtimes(host_name: str | None = None) -> str:
             f"  #{entry.get('downtime_id', '?')} {_label(entry)}: {state}, {start} → {end} | "
             f"{entry.get('author', '')}: {entry.get('comment', '')}"
         )
+    if unreadable:
+        lines.append(_unreadable_note(unreadable))
     return "\n".join(lines)
 
 
@@ -138,9 +196,13 @@ async def cancel_downtime(host_name: str, service_description: str | None = None
     """
     params = CancelDowntimeInput(host_name=host_name, service_description=service_description)
     author = config.get_config().comment_author
+    entries, unreadable = await _downtimes(params.host_name)
+    # An unrenderable entry's author cannot be read, and the author filter is what
+    # makes this tool safe to point at a host, so it is named rather than cancelled.
+    skipped = f" {_unreadable_note(unreadable)}" if unreadable else ""
     matches = [
         entry
-        for entry in await _downtimes(params.host_name)
+        for entry in entries
         if entry.get("host_name") == params.host_name
         and entry.get("author") == author
         and (
@@ -150,13 +212,14 @@ async def cancel_downtime(host_name: str, service_description: str | None = None
     ]
     if not matches:
         target = params.service_description or params.host_name
-        return f"No downtime by '{author}' to cancel on {target}."
+        return f"No downtime by '{author}' to cancel on {target}.{skipped}"
 
     client = get_client()
     for entry in matches:
         cmd = CMD_DEL_SVC_DOWNTIME if entry.get("service_description") else CMD_DEL_HOST_DOWNTIME
         await client.submit_command(cmd, {"down_id": str(entry.get("downtime_id", ""))})
-    return f"Cancelled {len(matches)} downtime(s): " + ", ".join(_label(e) for e in matches)
+    labels = ", ".join(_label(e) for e in matches)
+    return f"Cancelled {len(matches)} downtime(s): {labels}{skipped}"
 
 
 @dataclass
