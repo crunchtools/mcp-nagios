@@ -45,8 +45,9 @@ class NagiosClient:
             raise NagiosApiError(response.status_code, response.text[:200])
         envelope: dict[str, Any] = response.json()
         result = envelope.get("result", {})
-        if result.get("type_code", -1) != 0:
-            raise NagiosQueryError(result.get("message", "Unknown error"))
+        code = result.get("type_code", -1)
+        if code != 0:
+            raise NagiosQueryError(result.get("message", "Unknown error"), code)
         return envelope
 
     async def query_archive(self, params: dict[str, str]) -> dict[str, Any]:
@@ -57,8 +58,9 @@ class NagiosClient:
             raise NagiosApiError(response.status_code, response.text[:200])
         envelope: dict[str, Any] = response.json()
         result = envelope.get("result", {})
-        if result.get("type_code", -1) != 0:
-            raise NagiosQueryError(result.get("message", "Unknown error"))
+        code = result.get("type_code", -1)
+        if code != 0:
+            raise NagiosQueryError(result.get("message", "Unknown error"), code)
         return envelope
 
     async def submit_command(self, cmd_typ: int, form_data: dict[str, str]) -> str:

@@ -24,6 +24,14 @@ CMD_DEL_HOST_DOWNTIME = 78
 CMD_DEL_SVC_DOWNTIME = 79
 CMD_SCHEDULE_HOST_SVC_DOWNTIME = 86
 
+# statusjson.cgi's result code for an id it does not hold. The CGI calls it
+# "Option Value Invalid"; for an id this module read out of Nagios moments
+# earlier it means the window ended in between.
+QUERY_UNKNOWN_ID = 6
+# One statusjson.cgi request is one CGI process reading the whole status file,
+# so the per-id reads run a few at a time rather than one per entry at once.
+DETAIL_FETCH_LIMIT = 4
+
 # Every service on a host, not the host's own check: the marker used for
 # SCHEDULE_HOST_SVC_DOWNTIME when attributing a window to the command behind it.
 ALL_SERVICES = "*"
@@ -164,7 +172,13 @@ async def _one_by_one(host_name: str | None) -> Listing:
     and only the entries holding the offending comment are lost.
     """
     ids = await _downtime_ids(host_name)
-    details = await asyncio.gather(*(_downtime_detail(entry_id) for entry_id in ids))
+    limit = asyncio.Semaphore(DETAIL_FETCH_LIMIT)
+
+    async def _detail(entry_id: int) -> _Detail:
+        async with limit:
+            return await _downtime_detail(entry_id)
+
+    details = await asyncio.gather(*(_detail(entry_id) for entry_id in ids))
     return Listing(
         _by_end_time(detail.entry for detail in details if detail.entry is not None),
         [entry_id for entry_id, detail in zip(ids, details, strict=True) if detail.unreadable],
@@ -180,14 +194,13 @@ async def _downtime_ids(host_name: str | None) -> list[int]:
         if error.code == HTTP_INTERNAL_ERROR:
             raise NagiosCgiCrashError("downtimelist") from error
         raise
-    raw = response["data"].get("downtimelist", [])
-    ids = []
-    for item in raw.keys() if isinstance(raw, dict) else raw:
-        try:
-            ids.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return ids
+    raw = response["data"].get("downtimelist") or []
+    if not isinstance(raw, list):
+        raise NagiosQueryError(f"downtimelist without details answered {type(raw).__name__}")
+    try:
+        return [int(entry_id) for entry_id in raw]
+    except (TypeError, ValueError) as error:
+        raise NagiosQueryError(f"downtimelist holds an id that is not a number: {error}") from error
 
 
 async def _downtime_detail(downtime_id: int) -> _Detail:
@@ -199,9 +212,11 @@ async def _downtime_detail(downtime_id: int) -> _Detail:
         if error.code != HTTP_INTERNAL_ERROR:
             raise
         return _Detail(None, unreadable=True)
-    except NagiosQueryError:
-        # The window ended between the id list and this fetch, so the CGI
-        # reports an unknown id. It is no longer scheduled; nothing is wrong.
+    except NagiosQueryError as error:
+        if error.code != QUERY_UNKNOWN_ID:
+            raise
+        # The window ended between the id list and this fetch, so the CGI no
+        # longer holds the id. It is not scheduled any more; nothing is wrong.
         return _Detail(None)
     entry = response["data"].get("downtime")
     return _Detail(entry if isinstance(entry, dict) else None)

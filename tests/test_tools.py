@@ -1,5 +1,6 @@
 """Tests for Nagios MCP server tools."""
 
+import asyncio
 import os
 import time
 from collections.abc import Iterator
@@ -14,7 +15,11 @@ from pydantic import ValidationError
 from mcp_nagios_crunchtools import client as client_mod
 from mcp_nagios_crunchtools import config as config_mod
 from mcp_nagios_crunchtools.config import Config
-from mcp_nagios_crunchtools.errors import NagiosApiError, NagiosCgiCrashError
+from mcp_nagios_crunchtools.errors import (
+    NagiosApiError,
+    NagiosCgiCrashError,
+    NagiosQueryError,
+)
 from mcp_nagios_crunchtools.models import MAX_HISTORY_HOURS
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
@@ -969,6 +974,64 @@ class TestDowntimeListSurvivesACrashedEntry:
         listings = [q for q in asked if q.get("query") == "downtimelist"]
         assert all("servicedescription" not in q for q in listings)
         assert all(q.get("hostname") == "lotor" for q in listings)
+
+    async def test_a_query_error_that_is_not_an_unknown_id_is_not_hidden(self) -> None:
+        """Only the ended-in-between case is silent; anything else has to be heard."""
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": [7]}))
+            if query.get("query") == "downtime":
+                return _mock_response(
+                    json_data={
+                        "result": {"type_code": 3, "message": "Authentication required"},
+                        "data": {},
+                    }
+                )
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply), pytest.raises(NagiosQueryError) as caught:
+            await list_downtimes()
+        assert "Authentication required" in str(caught.value)
+
+    async def test_an_id_that_is_not_a_number_is_reported_not_skipped(self) -> None:
+        """Dropping an id would hide a window, which is the bug being fixed."""
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": ["7", "oops"]}))
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply), pytest.raises(NagiosQueryError) as caught:
+            await list_downtimes()
+        assert "not a number" in str(caught.value)
+
+    async def test_the_per_id_reads_do_not_fan_out_over_the_whole_list(self) -> None:
+        """One CGI request is one process reading the status file; bound them."""
+        entries = {entry_id: _downtime(entry_id, "lotor", "josui") for entry_id in range(1, 13)}
+        live = 0
+        peak = 0
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            nonlocal live, peak
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": list(entries)}))
+            if query.get("query") == "downtime":
+                live += 1
+                peak = max(peak, live)
+                await asyncio.sleep(0)
+                live -= 1
+                entry = entries[int(query["downtimeid"])]
+                return _mock_response(json_data=_success_result({"downtime": entry}))
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply):
+            result = await list_downtimes()
+        assert "Scheduled downtime, 12 entries:" in result
+        # More entries than the limit, or there is no bound here to observe.
+        assert len(entries) > downtime_mod.DETAIL_FETCH_LIMIT
+        # Exactly the limit, not merely under it: unbounded, this would be 12.
+        assert peak == downtime_mod.DETAIL_FETCH_LIMIT
 
     async def test_a_readable_list_is_still_one_request(self) -> None:
         """The fallback must not cost a request per entry when nothing crashed."""

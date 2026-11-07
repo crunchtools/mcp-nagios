@@ -20,9 +20,14 @@ class NagiosApiError(ToolError):
 
 
 class NagiosQueryError(ToolError):
-    """Raised when a Nagios query returns a non-success result."""
+    """Raised when a Nagios query returns a non-success result.
 
-    def __init__(self, message: str) -> None:
+    `code` is the CGI's own `type_code`, kept so a caller can tell one failure
+    from another instead of having to read the message.
+    """
+
+    def __init__(self, message: str, code: int = -1) -> None:
+        self.code = code
         super().__init__(f"Nagios query failed: {message}")
 
 
@@ -51,5 +56,5 @@ class NagiosCgiCrashError(ToolError):
             "__mbstowcs_chk over a comment holding a character outside ASCII; "
             "confirm with 'statusjson.cgi ... dumped core' in the Nagios host's "
             "journal, and check Apache's error_log for anything else. "
-            "downtime_history reads nagios.log directly and still works."
+            "nagios_downtime_history reads nagios.log directly and still works."
         )
