@@ -1006,6 +1006,32 @@ class TestDowntimeListSurvivesACrashedEntry:
             await list_downtimes()
         assert "not a number" in str(caught.value)
 
+    async def test_a_downtimelist_that_is_not_a_list_is_reported(self) -> None:
+        """`details=false` answers an array; anything else is not an id list."""
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": {"7": {}}}))
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply), pytest.raises(NagiosQueryError) as caught:
+            await list_downtimes()
+        assert "answered dict" in str(caught.value)
+
+    async def test_an_http_error_that_is_not_a_crash_is_not_called_unreadable(self) -> None:
+        """A 403 on one entry is a broken deployment, not a comment to skip."""
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": [7]}))
+            if query.get("query") == "downtime":
+                return _mock_response(status_code=403, text="Forbidden")
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply), pytest.raises(NagiosApiError) as caught:
+            await list_downtimes()
+        assert "403" in str(caught.value)
+
     async def test_the_per_id_reads_do_not_fan_out_over_the_whole_list(self) -> None:
         """One CGI request is one process reading the status file; bound them."""
         entries = {entry_id: _downtime(entry_id, "lotor", "josui") for entry_id in range(1, 13)}
