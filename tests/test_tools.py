@@ -884,6 +884,43 @@ class TestListAndCancelDowntime:
         assert "outside ASCII" in message
         assert "downtime_history" in message
 
+    async def test_unrenderable_entry_costs_that_entry_not_the_list(self) -> None:
+        """One entry the CGI cannot render must not blind the list. See mcp-nagios#65."""
+        apache_page = "<html><title>500 Internal Server Error</title></html>"
+        responses = [
+            _mock_response(status_code=500, text=apache_page),  # details=true
+            _mock_response(json_data=_success_result({"downtimelist": [7, 8]})),
+            _mock_response(
+                json_data=_success_result({"downtime": _downtime(7, "gloval", "josui", "Backup")})
+            ),
+            _mock_response(status_code=500, text=apache_page),  # id 8
+        ]
+        with _patch_client(*responses):
+            result = await list_downtimes()
+        assert "#7 gloval / Backup: in effect" in result
+        assert "#8" in result
+        assert "Could not render" in result
+
+    async def test_cancel_ends_the_clean_entry_and_names_the_unrenderable_one(self) -> None:
+        apache_page = "<html><title>500 Internal Server Error</title></html>"
+        responses = [
+            _mock_response(status_code=500, text=apache_page),
+            _mock_response(json_data=_success_result({"downtimelist": [7, 8]})),
+            _mock_response(
+                json_data=_success_result({"downtime": _downtime(7, "gloval", "josui", "Backup")})
+            ),
+            _mock_response(status_code=500, text=apache_page),
+        ]
+        sent: list[tuple[int, dict[str, str]]] = []
+        recorder = _capturing_client(sent)
+        with _patch_client(*responses):
+            recorder.query_status = client_mod.get_client().query_status
+            with patch.object(downtime_mod, "get_client", return_value=recorder):
+                result = await cancel_downtime("gloval", "Backup")
+        assert sent == [(downtime_mod.CMD_DEL_SVC_DOWNTIME, {"down_id": "7"})]
+        assert "Cancelled 1 downtime(s)" in result
+        assert "#8" in result
+
     async def test_other_http_errors_are_not_misreported_as_the_crash(self) -> None:
         with (
             _patch_client(_mock_response(status_code=403, text="Forbidden")),
