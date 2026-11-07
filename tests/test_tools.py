@@ -1057,6 +1057,35 @@ class TestDowntimeListSurvivesACrashedEntry:
             await list_downtimes()
         assert "403" in str(caught.value)
 
+    async def test_a_repeated_id_counts_and_cancels_once(self) -> None:
+        """A CGI that lists an id twice must not make the tool double-report it."""
+        readable = _downtime(7, "lotor", "josui", "HTTPS")
+        sent: list[tuple[int, dict[str, str]]] = []
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": [7, 7]}))
+            if query.get("query") == "downtime":
+                return _mock_response(json_data=_success_result({"downtime": readable}))
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply):
+            assert "Scheduled downtime, 1 entry:" in await list_downtimes()
+            recorder = _capturing_client(sent)
+            recorder.query_status = client_mod.get_client().query_status
+            with patch.object(downtime_mod, "get_client", return_value=recorder):
+                result = await cancel_downtime("lotor")
+        assert sent == [(downtime_mod.CMD_DEL_SVC_DOWNTIME, {"down_id": "7"})]
+        assert "Cancelled 1 downtime(s)" in result
+
+    async def test_the_host_selector_does_not_leak_between_queries(self) -> None:
+        """`_scoped` must copy, so a host-scoped read cannot taint an unscoped one."""
+        base = {"query": "downtimelist", "details": "true"}
+        scoped = downtime_mod._scoped(base, "lotor")
+        assert scoped["hostname"] == "lotor"
+        assert "hostname" not in base
+        assert "hostname" not in downtime_mod._scoped(base, None)
+
     async def test_one_failed_read_does_not_abandon_the_others(self) -> None:
         """A raise must not leave siblings hitting the CGI after the tool answered.
 

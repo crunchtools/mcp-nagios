@@ -103,6 +103,10 @@ class Listing:
     `unreadable` holds the ids of entries Nagios crashed on rather than
     rendered, so a caller can say what it could not see instead of implying
     the downtime is not there. See `_one_by_one` and mcp-nagios#65.
+
+    Read it through `__bool__` and `total`, never `entries` alone: an
+    emptiness or count test that forgets `unreadable` reports no downtime
+    while a window is in effect, which is the bug #65 was filed for.
     """
 
     entries: list[dict[str, Any]] = field(default_factory=list)
@@ -135,14 +139,14 @@ def _by_end_time(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _scoped(query: dict[str, str], host_name: str | None) -> dict[str, str]:
-    """Add the host selector, if there is one.
+    """A copy of the query with the host selector added, if there is one.
 
     Only the host is ever selected on, never the service: cancelling a host's
-    downtime has to find the host's own window alongside its services'.
+    downtime has to find the host's own window alongside its services'. A copy
+    rather than the argument, so a base query shared between calls can never
+    carry one call's `hostname` into the next.
     """
-    if host_name:
-        query["hostname"] = host_name
-    return query
+    return {**query, "hostname": host_name} if host_name else dict(query)
 
 
 async def _downtimes(host_name: str | None) -> Listing:
@@ -206,9 +210,13 @@ async def _downtime_ids(host_name: str | None) -> list[int]:
     if not isinstance(raw, list):
         raise NagiosQueryError(f"downtimelist without details answered {type(raw).__name__}")
     try:
-        return [int(entry_id) for entry_id in raw]
+        ids = [int(entry_id) for entry_id in raw]
     except (TypeError, ValueError) as error:
         raise NagiosQueryError(f"downtimelist holds an id that is not a number: {error}") from error
+    # Nagios keys downtime by id, so a repeat means the CGI contradicted
+    # itself. Counting one window twice would have cancel_downtime submit the
+    # same deletion twice and then report two windows ended.
+    return list(dict.fromkeys(ids))
 
 
 async def _downtime_detail(downtime_id: int) -> _Detail:
