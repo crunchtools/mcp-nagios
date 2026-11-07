@@ -178,7 +178,15 @@ async def _one_by_one(host_name: str | None) -> Listing:
         async with limit:
             return await _downtime_detail(entry_id)
 
-    details = await asyncio.gather(*(_detail(entry_id) for entry_id in ids))
+    # return_exceptions keeps a failure from abandoning its siblings: plain
+    # gather raises the first one and leaves the rest running, so a tool that
+    # had already answered with an error would go on hitting the CGI.
+    settled = await asyncio.gather(*(_detail(entry_id) for entry_id in ids), return_exceptions=True)
+    details: list[_Detail] = []
+    for outcome in settled:
+        if isinstance(outcome, BaseException):
+            raise outcome
+        details.append(outcome)
     return Listing(
         _by_end_time(detail.entry for detail in details if detail.entry is not None),
         [entry_id for entry_id, detail in zip(ids, details, strict=True) if detail.unreadable],

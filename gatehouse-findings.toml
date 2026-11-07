@@ -5,7 +5,7 @@
 agent = "performance"
 category = "performance"
 file = "src/mcp_nagios_crunchtools/tools/downtime.py"
-evidence = "details = await asyncio.gather(*(_detail(entry_id) for entry_id in ids))"
+evidence = "settled = await asyncio.gather(\n    *(_detail(entry_id) for entry_id in ids), return_exceptions=True\n)"
 status = "not-a-bug"
 reason = """
 There is no batched detail API to use. statusjson.cgi offers exactly two

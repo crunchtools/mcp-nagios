@@ -906,6 +906,31 @@ def _patch_crashing_client(
         yield asked
 
 
+class TestQueryErrorsCarryTheirCode:
+    """`type_code` is what tells one CGI query failure from another."""
+
+    UNKNOWN_ID = 6
+    BAD_OPTION = 3
+
+    async def test_a_status_query_failure_keeps_its_code(self) -> None:
+        failure = {"result": {"type_code": self.UNKNOWN_ID, "message": "not found"}, "data": {}}
+        with (
+            _patch_client(_mock_response(json_data=failure)),
+            pytest.raises(NagiosQueryError) as caught,
+        ):
+            await client_mod.get_client().query_status({"query": "downtime"})
+        assert caught.value.code == self.UNKNOWN_ID
+
+    async def test_an_archive_query_failure_keeps_its_code(self) -> None:
+        failure = {"result": {"type_code": self.BAD_OPTION, "message": "bad option"}, "data": {}}
+        with (
+            _patch_client(_mock_response(json_data=failure)),
+            pytest.raises(NagiosQueryError) as caught,
+        ):
+            await client_mod.get_client().query_archive({"query": "alertlist"})
+        assert caught.value.code == self.BAD_OPTION
+
+
 class TestDowntimeListSurvivesACrashedEntry:
     """One comment Nagios cannot render must not hide every other downtime.
 
@@ -1031,6 +1056,33 @@ class TestDowntimeListSurvivesACrashedEntry:
         with _patch_dispatching_client(_reply), pytest.raises(NagiosApiError) as caught:
             await list_downtimes()
         assert "403" in str(caught.value)
+
+    async def test_one_failed_read_does_not_abandon_the_others(self) -> None:
+        """A raise must not leave siblings hitting the CGI after the tool answered.
+
+        Plain `gather` propagates the first exception and leaves the rest
+        running, so the tool returns an error while its own requests carry on.
+        """
+        reached: list[int] = []
+        ids = [1, 2, 3]
+        forbidden = ids[1]
+
+        async def _reply(query: dict[str, str]) -> httpx.Response:
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": ids}))
+            if query.get("query") == "downtime":
+                entry_id = int(query["downtimeid"])
+                reached.append(entry_id)
+                if entry_id == forbidden:
+                    return _mock_response(status_code=403, text="Forbidden")
+                entry = _downtime(entry_id, "lotor", "josui")
+                return _mock_response(json_data=_success_result({"downtime": entry}))
+            return _mock_response(status_code=500, text=APACHE_500)
+
+        with _patch_dispatching_client(_reply), pytest.raises(NagiosApiError):
+            await list_downtimes()
+        # All three settled before the error surfaced; none was left in flight.
+        assert sorted(reached) == ids
 
     async def test_the_per_id_reads_do_not_fan_out_over_the_whole_list(self) -> None:
         """One CGI request is one process reading the status file; bound them."""
