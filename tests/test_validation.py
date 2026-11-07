@@ -6,8 +6,10 @@ from pydantic import ValidationError
 from mcp_nagios_crunchtools.models import (
     AcknowledgeInput,
     CommentInput,
+    DowntimeInput,
     ListDowntimesInput,
     ScheduleCheckInput,
+    to_nagios_ascii,
 )
 
 
@@ -108,3 +110,64 @@ class TestWritePathValidation:
 
         with pytest.raises(ValidationError):
             await schedule_check(host_name="h" * 256)
+
+
+class TestCommentAsciiFolding:
+    """Nagios 4.5.9 crashes rendering a non-ASCII comment, so none reach it.
+
+    See crunchtools/mcp-nagios#65. The real comment that broke production is
+    the em-dash case; the rest guard the substitutions around it.
+    """
+
+    def test_em_dash_folded(self) -> None:
+        inp = DowntimeInput(
+            host_name="gloval.dc4.crunchtools.com",
+            comment="not a backup failure \u2014 ages are inside thresholds",
+            minutes=60,
+        )
+        assert inp.comment == "not a backup failure -- ages are inside thresholds"
+        inp.comment.encode("ascii")
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("en \u2013 dash", "en - dash"),
+            ("\u201csmart\u201d quotes", '"smart" quotes'),
+            ("it\u2019s", "it's"),
+            ("wait\u2026", "wait..."),
+            ("a \u2192 b", "a -> b"),
+            ("load \u2265 10", "load >= 10"),
+            ("caf\u00e9", "cafe"),
+            ("hard\u00a0space", "hard space"),
+            ("\u2022 bullet", "* bullet"),
+            ("plain ascii", "plain ascii"),
+        ],
+    )
+    def test_substitutions(self, raw: str, expected: str) -> None:
+        assert CommentInput(host_name="lotor", comment=raw).comment == expected
+
+    def test_every_comment_field_folds(self) -> None:
+        dashed = "restarting \u2014 idle seat"
+        assert AcknowledgeInput(host_name="lotor", comment=dashed).comment == (
+            "restarting -- idle seat"
+        )
+        assert CommentInput(host_name="lotor", comment=dashed).comment == (
+            "restarting -- idle seat"
+        )
+        assert DowntimeInput(host_name="lotor", comment=dashed, minutes=5).comment == (
+            "restarting -- idle seat"
+        )
+
+    def test_comment_with_no_ascii_reading_rejected(self) -> None:
+        # Folding would leave an empty comment, which Nagios rejects anyway.
+        with pytest.raises(ValidationError, match="no ASCII content"):
+            CommentInput(host_name="lotor", comment="\U0001f6a8\U0001f6a8")
+
+    def test_length_checked_before_folding(self) -> None:
+        with pytest.raises(ValidationError):
+            CommentInput(host_name="lotor", comment="\u2014" * 5001)
+
+
+def test_to_nagios_ascii_leaves_ascii_untouched() -> None:
+    text = "ServerBackups-Weekly-1: 10/15 fresh (worst 4d) -> OK"
+    assert to_nagios_ascii(text) == text

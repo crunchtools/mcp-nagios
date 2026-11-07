@@ -13,6 +13,7 @@ from .errors import NagiosApiError, NagiosQueryError
 logger = logging.getLogger(__name__)
 
 HTTP_OK = 200
+HTTP_INTERNAL_ERROR = 500
 
 
 class NagiosClient:

@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-07
+
+### Fixed
+
+- Comments are folded to ASCII before they are submitted, so a character
+  outside ASCII can no longer take down `nagios_list_downtimes` and
+  `nagios_cancel_downtime`. Nagios 4.5.9's `statusjson.cgi` aborts in
+  `__mbstowcs_chk` and dumps core while rendering such a comment, and because
+  the crash kills the read that `nagios_cancel_downtime` depends on, the
+  offending comment could not be removed until it expired. Punctuation that
+  carries meaning is spelled out (`--`, `...`, `->`, `>=`) rather than dropped,
+  and an accented letter keeps its base letter. A comment with no ASCII reading
+  at all is rejected at validation with a message saying why.
+  (crunchtools/mcp-nagios#65)
+- An HTTP 500 from the JSON CGI now raises `NagiosCgiCrashError`, which names
+  the query that crashed, the non-ASCII comment as the known cause, and
+  `nagios_downtime_history` as the way to read downtime meanwhile. It used to
+  surface as a bare `Nagios API error 500` carrying an Apache HTML page, which
+  read as a Nagios outage rather than as one bad comment. Other HTTP errors
+  are unchanged.
+
 ## [0.8.2] - 2026-10-31
 
 ### Security
