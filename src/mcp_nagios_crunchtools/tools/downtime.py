@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
-from ..client import _format_age, _format_timestamp, get_client
-from ..errors import ConfigurationError
+from ..client import HTTP_INTERNAL_ERROR, _format_age, _format_timestamp, get_client
+from ..errors import ConfigurationError, NagiosApiError, NagiosCgiCrashError
 from ..models import CancelDowntimeInput, DowntimeInput, HistoryInput, ListDowntimesInput
 
 CMD_SCHEDULE_HOST_DOWNTIME = 55
@@ -87,7 +87,12 @@ async def _downtimes(host_name: str | None) -> list[dict[str, Any]]:
     query = {"query": "downtimelist", "details": "true"}
     if host_name:
         query["hostname"] = host_name
-    response = await get_client().query_status(query)
+    try:
+        response = await get_client().query_status(query)
+    except NagiosApiError as error:
+        if error.code == HTTP_INTERNAL_ERROR:
+            raise NagiosCgiCrashError("downtimelist") from error
+        raise
     raw = response["data"].get("downtimelist", {})
     entries = list(raw.values()) if isinstance(raw, dict) else list(raw)
     return sorted(

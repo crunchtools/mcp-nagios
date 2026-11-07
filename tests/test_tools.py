@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from mcp_nagios_crunchtools import client as client_mod
 from mcp_nagios_crunchtools import config as config_mod
 from mcp_nagios_crunchtools.config import Config
+from mcp_nagios_crunchtools.errors import NagiosApiError, NagiosCgiCrashError
 from mcp_nagios_crunchtools.models import MAX_HISTORY_HOURS
 from mcp_nagios_crunchtools.server import mcp
 from mcp_nagios_crunchtools.tools import (
@@ -864,6 +865,32 @@ class TestListAndCancelDowntime:
         data: dict[str, Any] = {"downtimelist": {}}
         with _patch_client(_mock_response(json_data=_success_result(data))):
             assert await list_downtimes("web01") == "No scheduled downtime for host 'web01'."
+
+    async def test_cgi_crash_is_diagnosed_not_relayed_as_a_bare_500(self) -> None:
+        """A crashed CGI must name its own known cause. See mcp-nagios#65.
+
+        Nagios 4.5.9 aborts rendering a non-ASCII comment, so the reply is an
+        Apache error page. Relaying "Nagios API error 500" sent a reader
+        hunting through Nagios instead of at the comment that caused it.
+        """
+        apache_page = "<html><head><title>500 Internal Server Error</title></head></html>"
+        with (
+            _patch_client(_mock_response(status_code=500, text=apache_page)),
+            pytest.raises(NagiosCgiCrashError) as caught,
+        ):
+            await list_downtimes()
+        message = str(caught.value)
+        assert "downtimelist" in message
+        assert "outside ASCII" in message
+        assert "downtime_history" in message
+
+    async def test_other_http_errors_are_not_misreported_as_the_crash(self) -> None:
+        with (
+            _patch_client(_mock_response(status_code=403, text="Forbidden")),
+            pytest.raises(NagiosApiError) as caught,
+        ):
+            await list_downtimes()
+        assert "403" in str(caught.value)
 
     async def test_cancel_touches_only_our_downtime_on_that_host(self) -> None:
         listing = {
