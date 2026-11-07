@@ -27,22 +27,29 @@ class NagiosQueryError(ToolError):
 
 
 class NagiosCgiCrashError(ToolError):
-    """Raised when the JSON CGI dies mid-query instead of answering it.
+    """Raised when the JSON CGI dies on a query that renders no stored string.
 
     An HTTP 500 from statusjson.cgi is a crashed CGI, not a Nagios error
     response, so it arrives as an Apache HTML page with nothing in it to read.
     The cause we have seen is a stored comment holding a character outside
     ASCII: Nagios 4.5.9 aborts in __mbstowcs_chk while rendering it.
+
+    A single such comment no longer reaches this error. The downtime read path
+    falls back to listing ids and fetching each one, which costs only the
+    entries that cannot be rendered. This is raised when even the id list
+    crashes, and the id list renders nothing a comment can poison -- so it
+    means the CGI itself is broken rather than one stored comment.
     """
 
     def __init__(self, query: str) -> None:
         super().__init__(
-            f"Nagios' JSON CGI crashed on the '{query}' query (HTTP 500 from "
-            "Apache, no Nagios error body). The known cause is a stored comment "
-            "holding a character outside ASCII, which makes Nagios 4.5.9 abort "
-            "in __mbstowcs_chk while rendering it; the crash also takes "
-            "cancel_downtime down, so the offending comment cannot be removed "
-            "until it expires. Confirm with 'statusjson.cgi ... dumped core' in "
-            "the Nagios host's journal. downtime_history reads nagios.log "
-            "directly and still works. See crunchtools/mcp-nagios#65."
+            f"Nagios' JSON CGI crashed on the '{query}' id list (HTTP 500 from "
+            "Apache, no Nagios error body). That query renders no stored string, "
+            "so this is not the single bad comment behind mcp-nagios#65 -- which "
+            "is handled by skipping the entry -- but the CGI failing outright. "
+            "The crash we have on record is Nagios 4.5.9 aborting in "
+            "__mbstowcs_chk over a comment holding a character outside ASCII; "
+            "confirm with 'statusjson.cgi ... dumped core' in the Nagios host's "
+            "journal, and check Apache's error_log for anything else. "
+            "downtime_history reads nagios.log directly and still works."
         )

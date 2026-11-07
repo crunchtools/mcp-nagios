@@ -20,12 +20,26 @@ All notable changes to this project are documented here. The format follows
   and an accented letter keeps its base letter. A comment with no ASCII reading
   at all is rejected at validation with a message saying why.
   (crunchtools/mcp-nagios#65)
+- `nagios_list_downtimes` and `nagios_cancel_downtime` now survive a downtime
+  entry Nagios cannot render. The details query is still one request; when it
+  crashes, the list is read again as ids (`details=false` renders no stored
+  string, so it cannot crash) and each id is fetched on its own. One bad
+  comment now costs that one entry instead of every tool that reads downtime,
+  so a window scheduled alongside it can still be listed and cancelled.
+  `nagios_list_downtimes` counts the entry it could not render and names its
+  id rather than implying no downtime is there.
+- `nagios_cancel_downtime` leaves an unrenderable entry alone and says so. Its
+  author cannot be read, and the author filter is what makes pointing the tool
+  at a host safe; in steady state every window this server opens has an ASCII
+  comment, so an unrenderable one was opened by a person. `nagios_downtime_history`
+  names who opened it.
 - An HTTP 500 from the JSON CGI now raises `NagiosCgiCrashError`, which names
   the query that crashed, the non-ASCII comment as the known cause, and
   `nagios_downtime_history` as the way to read downtime meanwhile. It used to
   surface as a bare `Nagios API error 500` carrying an Apache HTML page, which
-  read as a Nagios outage rather than as one bad comment. Other HTTP errors
-  are unchanged.
+  read as a Nagios outage rather than as one bad comment. It is now raised only
+  when the id list itself crashes, which no stored comment can cause, so it
+  means the CGI is broken outright. Other HTTP errors are unchanged.
 
 ## [0.8.2] - 2026-10-31
 

@@ -36,7 +36,7 @@ from mcp_nagios_crunchtools.tools import commands as commands_mod
 from mcp_nagios_crunchtools.tools import downtime as downtime_mod
 from mcp_nagios_crunchtools.tools import history as history_mod
 
-from .conftest import _mock_response, _patch_client
+from .conftest import _mock_response, _patch_client, _patch_dispatching_client
 
 TOOL_COUNT = 13
 
@@ -851,6 +851,131 @@ def _downtime(down_id: int, host: str, author: str, service: str | None = None) 
     if service:
         entry["service_description"] = service
     return entry
+
+
+APACHE_500 = "<html><head><title>500 Internal Server Error</title></head></html>"
+
+
+@contextmanager
+def _patch_crashing_client(
+    ids: list[int],
+    renderable: dict[int, dict[str, Any]],
+    vanished: frozenset[int] = frozenset(),
+) -> Iterator[list[dict[str, str]]]:
+    """Stand in for a Nagios whose details renderer crashes on some entries.
+
+    `query=downtimelist&details=true`, and `query=downtime` for an id outside
+    `renderable`, answer the Apache error page a crashed CGI produces;
+    `details=false` answers `ids`, which is the query that cannot crash. An id
+    in `vanished` answers the unknown-id query error Nagios gives for a window
+    that ended between the id list and the fetch. The queries that were asked
+    are recorded for the caller to assert on.
+    """
+    asked: list[dict[str, str]] = []
+
+    async def _reply(query: dict[str, str]) -> httpx.Response:
+        asked.append(dict(query))
+        if query.get("query") == "downtimelist":
+            if query.get("details") == "false":
+                return _mock_response(json_data=_success_result({"downtimelist": ids}))
+            return _mock_response(status_code=500, text=APACHE_500)
+        if query.get("query") == "downtime":
+            entry_id = int(query["downtimeid"])
+            if entry_id in vanished:
+                return _mock_response(
+                    json_data={
+                        "result": {
+                            "type_code": 6,
+                            "type_text": "Option Value Invalid",
+                            "message": f"The downtime with ID '{entry_id}' was not found.",
+                        },
+                        "data": {},
+                    }
+                )
+            if entry_id not in renderable:
+                return _mock_response(status_code=500, text=APACHE_500)
+            return _mock_response(json_data=_success_result({"downtime": renderable[entry_id]}))
+        raise AssertionError(f"unexpected query {query}")
+
+    with _patch_dispatching_client(_reply):
+        yield asked
+
+
+class TestDowntimeListSurvivesACrashedEntry:
+    """One comment Nagios cannot render must not hide every other downtime.
+
+    Nagios 4.5.9 aborts in __mbstowcs_chk rendering any stored string holding a
+    byte outside ASCII, which 500s the whole `downtimelist` details query and
+    so blinded both tools that read it. See mcp-nagios#65.
+    """
+
+    async def test_list_names_what_it_could_not_render_and_shows_the_rest(self) -> None:
+        readable = _downtime(7, "ctr-mcp-trove", "josui", "MCP port")
+        with _patch_crashing_client([7, 8], {7: readable}) as asked:
+            result = await list_downtimes()
+        assert "#7 ctr-mcp-trove / MCP port: in effect" in result
+        # Both entries are counted, so the reply never implies #8 is not there.
+        assert result.startswith("Scheduled downtime, 2 entries:")
+        assert "1 entry Nagios could not render (#8)" in result
+        assert "outside ASCII" in result
+        assert "nagios_downtime_history" in result
+        # The id list is the query that cannot crash, so it must be asked
+        # without details rather than retried with them.
+        assert {"query": "downtimelist", "details": "false"} in asked
+
+    async def test_a_window_that_ended_mid_read_is_not_reported_as_unreadable(self) -> None:
+        readable = _downtime(7, "lotor", "josui")
+        with _patch_crashing_client([7, 9], {7: readable}, vanished=frozenset({9})):
+            result = await list_downtimes()
+        assert result.startswith("Scheduled downtime, 1 entry:")
+        assert "could not render" not in result
+
+    async def test_everything_unreadable_still_says_downtime_exists(self) -> None:
+        with _patch_crashing_client([8], {}):
+            result = await list_downtimes("web01")
+        assert "No scheduled downtime" not in result
+        assert "1 entry Nagios could not render (#8)" in result
+
+    async def test_cancel_ends_the_readable_window_and_leaves_the_other_alone(self) -> None:
+        readable = _downtime(7, "ctr-mcp-trove", "josui", "MCP port")
+        sent: list[tuple[int, dict[str, str]]] = []
+        with _patch_crashing_client([7, 8], {7: readable}):
+            recorder = _capturing_client(sent)
+            recorder.query_status = client_mod.get_client().query_status
+            with patch.object(downtime_mod, "get_client", return_value=recorder):
+                result = await cancel_downtime("ctr-mcp-trove")
+        assert sent == [(downtime_mod.CMD_DEL_SVC_DOWNTIME, {"down_id": "7"})]
+        assert "Cancelled 1 downtime(s)" in result
+        # The author guard cannot clear an entry Nagios will not describe, and
+        # in steady state that entry is a person's. Say so; do not cancel it.
+        assert "Left 1 alone (#8)" in result
+
+    async def test_cancel_reports_the_unreadable_entry_when_nothing_matched(self) -> None:
+        readable = _downtime(7, "lotor", "admin")
+        with _patch_crashing_client([7, 8], {7: readable}):
+            result = await cancel_downtime("lotor")
+        assert result.startswith("No downtime by 'josui' to cancel on lotor.")
+        assert "Left 1 alone (#8)" in result
+
+    async def test_cancel_scopes_the_id_list_to_the_host_not_the_service(self) -> None:
+        """A host-scoped cancel has to see the host's own window too.
+
+        Selecting on servicedescription as well would drop it from the id list,
+        so only the host selector is ever sent.
+        """
+        readable = _downtime(7, "lotor", "josui", "HTTPS")
+        with _patch_crashing_client([7, 8], {7: readable}) as asked:
+            await cancel_downtime("lotor", "HTTPS")
+        listings = [q for q in asked if q.get("query") == "downtimelist"]
+        assert all("servicedescription" not in q for q in listings)
+        assert all(q.get("hostname") == "lotor" for q in listings)
+
+    async def test_a_readable_list_is_still_one_request(self) -> None:
+        """The fallback must not cost a request per entry when nothing crashed."""
+        data = {"downtimelist": {"7": _downtime(7, "lotor", "josui")}}
+        with _patch_client(_mock_response(json_data=_success_result(data))) as http:
+            await list_downtimes()
+        assert http.get.await_count == 1
 
 
 class TestListAndCancelDowntime:

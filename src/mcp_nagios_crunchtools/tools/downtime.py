@@ -3,13 +3,19 @@
 import asyncio
 import re
 import time
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .. import config
 from ..client import HTTP_INTERNAL_ERROR, _format_age, _format_timestamp, get_client
-from ..errors import ConfigurationError, NagiosApiError, NagiosCgiCrashError
+from ..errors import (
+    ConfigurationError,
+    NagiosApiError,
+    NagiosCgiCrashError,
+    NagiosQueryError,
+)
 from ..models import CancelDowntimeInput, DowntimeInput, HistoryInput, ListDowntimesInput
 
 CMD_SCHEDULE_HOST_DOWNTIME = 55
@@ -82,22 +88,133 @@ async def schedule_downtime(
     )
 
 
-async def _downtimes(host_name: str | None) -> list[dict[str, Any]]:
-    """Current and future downtimes from statusjson.cgi, soonest end first."""
-    query = {"query": "downtimelist", "details": "true"}
+@dataclass
+class Listing:
+    """The scheduled downtime statusjson.cgi was able to describe.
+
+    `unreadable` holds the ids of entries Nagios crashed on rather than
+    rendered, so a caller can say what it could not see instead of implying
+    the downtime is not there. See `_one_by_one` and mcp-nagios#65.
+    """
+
+    entries: list[dict[str, Any]] = field(default_factory=list)
+    unreadable: list[int] = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.entries or self.unreadable)
+
+    @property
+    def total(self) -> int:
+        return len(self.entries) + len(self.unreadable)
+
+
+@dataclass(frozen=True)
+class _Detail:
+    """What asking for one downtime id returned.
+
+    `entry` is None both when Nagios crashed rendering the entry, which sets
+    `unreadable`, and when the window ended between the id list and this
+    fetch, which the CGI answers as a query error rather than a crash and
+    which is not a failure worth reporting.
+    """
+
+    entry: dict[str, Any] | None
+    unreadable: bool = False
+
+
+def _by_end_time(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(entries, key=lambda entry: entry.get("end_time", 0))
+
+
+def _scoped(query: dict[str, str], host_name: str | None) -> dict[str, str]:
+    """Add the host selector, if there is one.
+
+    Only the host is ever selected on, never the service: cancelling a host's
+    downtime has to find the host's own window alongside its services'.
+    """
     if host_name:
         query["hostname"] = host_name
+    return query
+
+
+async def _downtimes(host_name: str | None) -> Listing:
+    """Current and future downtimes from statusjson.cgi, soonest end first.
+
+    One request carries the whole list. When Nagios crashes rendering it the
+    list is read again entry by entry, so an entry it cannot render costs that
+    entry rather than every tool that reads downtime.
+    """
+    query = _scoped({"query": "downtimelist", "details": "true"}, host_name)
+    try:
+        response = await get_client().query_status(query)
+    except NagiosApiError as error:
+        if error.code != HTTP_INTERNAL_ERROR:
+            raise
+        return await _one_by_one(host_name)
+    raw = response["data"].get("downtimelist", {})
+    entries = list(raw.values()) if isinstance(raw, dict) else list(raw)
+    return Listing(_by_end_time(entry for entry in entries if isinstance(entry, dict)))
+
+
+async def _one_by_one(host_name: str | None) -> Listing:
+    """Read the downtime list an entry at a time, skipping what Nagios cannot render.
+
+    `details=false` renders none of the stored strings, so the list of ids
+    survives the crash in mcp-nagios#65; each id is then asked for on its own
+    and only the entries holding the offending comment are lost.
+    """
+    ids = await _downtime_ids(host_name)
+    details = await asyncio.gather(*(_downtime_detail(entry_id) for entry_id in ids))
+    return Listing(
+        _by_end_time(detail.entry for detail in details if detail.entry is not None),
+        [entry_id for entry_id, detail in zip(ids, details, strict=True) if detail.unreadable],
+    )
+
+
+async def _downtime_ids(host_name: str | None) -> list[int]:
+    """Every scheduled downtime's id, from the one query that cannot crash."""
+    query = _scoped({"query": "downtimelist", "details": "false"}, host_name)
     try:
         response = await get_client().query_status(query)
     except NagiosApiError as error:
         if error.code == HTTP_INTERNAL_ERROR:
             raise NagiosCgiCrashError("downtimelist") from error
         raise
-    raw = response["data"].get("downtimelist", {})
-    entries = list(raw.values()) if isinstance(raw, dict) else list(raw)
-    return sorted(
-        (entry for entry in entries if isinstance(entry, dict)),
-        key=lambda entry: entry.get("end_time", 0),
+    raw = response["data"].get("downtimelist", [])
+    ids = []
+    for item in raw.keys() if isinstance(raw, dict) else raw:
+        try:
+            ids.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+async def _downtime_detail(downtime_id: int) -> _Detail:
+    """One downtime's fields, or why they could not be read."""
+    query = {"query": "downtime", "downtimeid": str(downtime_id)}
+    try:
+        response = await get_client().query_status(query)
+    except NagiosApiError as error:
+        if error.code != HTTP_INTERNAL_ERROR:
+            raise
+        return _Detail(None, unreadable=True)
+    except NagiosQueryError:
+        # The window ended between the id list and this fetch, so the CGI
+        # reports an unknown id. It is no longer scheduled; nothing is wrong.
+        return _Detail(None)
+    entry = response["data"].get("downtime")
+    return _Detail(entry if isinstance(entry, dict) else None)
+
+
+def _unreadable_note(ids: list[int]) -> str:
+    """One line naming the entries Nagios could not render, and what to do instead."""
+    listed = ", ".join(f"#{entry_id}" for entry_id in ids)
+    subject = "entry" if len(ids) == 1 else "entries"
+    return (
+        f"  {len(ids)} {subject} Nagios could not render ({listed}): the stored comment holds "
+        "a character outside ASCII, which crashes statusjson.cgi (mcp-nagios#65). "
+        "nagios_downtime_history reads nagios.log and still shows them."
     )
 
 
@@ -110,13 +227,14 @@ def _label(entry: dict[str, Any]) -> str:
 async def list_downtimes(host_name: str | None = None) -> str:
     """List scheduled downtimes that are active or still to come."""
     params = ListDowntimesInput(host_name=host_name)
-    entries = await _downtimes(params.host_name)
-    if not entries:
+    listing = await _downtimes(params.host_name)
+    if not listing:
         scope = f" for host '{host_name}'" if host_name else ""
         return f"No scheduled downtime{scope}."
 
-    lines = [f"Scheduled downtime, {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}:"]
-    for entry in entries:
+    total = listing.total
+    lines = [f"Scheduled downtime, {total} entr{'y' if total == 1 else 'ies'}:"]
+    for entry in listing.entries:
         state = "in effect" if entry.get("is_in_effect") else "pending"
         start = _format_timestamp(entry.get("start_time", 0))
         end = _format_timestamp(entry.get("end_time", 0))
@@ -124,6 +242,8 @@ async def list_downtimes(host_name: str | None = None) -> str:
             f"  #{entry.get('downtime_id', '?')} {_label(entry)}: {state}, {start} → {end} | "
             f"{entry.get('author', '')}: {entry.get('comment', '')}"
         )
+    if listing.unreadable:
+        lines.append(_unreadable_note(listing.unreadable))
     return "\n".join(lines)
 
 
@@ -138,9 +258,10 @@ async def cancel_downtime(host_name: str, service_description: str | None = None
     """
     params = CancelDowntimeInput(host_name=host_name, service_description=service_description)
     author = config.get_config().comment_author
+    listing = await _downtimes(params.host_name)
     matches = [
         entry
-        for entry in await _downtimes(params.host_name)
+        for entry in listing.entries
         if entry.get("host_name") == params.host_name
         and entry.get("author") == author
         and (
@@ -148,15 +269,30 @@ async def cancel_downtime(host_name: str, service_description: str | None = None
             or entry.get("service_description") == params.service_description
         )
     ]
+    # An entry Nagios cannot render cannot be checked against the author, and
+    # the author filter is the whole reason this tool is safe to point at a
+    # host. In steady state every window this server opens has an ASCII
+    # comment, so an unrenderable one was opened by a person -- exactly the
+    # window the filter exists to leave alone. Name it and leave it.
+    blocked = (
+        f" Left {len(listing.unreadable)} alone "
+        f"({', '.join(f'#{i}' for i in listing.unreadable)}): Nagios cannot render "
+        "the entry, so its author cannot be checked. nagios_downtime_history names "
+        "who opened it, and the Nagios web UI can end it."
+        if listing.unreadable
+        else ""
+    )
     if not matches:
         target = params.service_description or params.host_name
-        return f"No downtime by '{author}' to cancel on {target}."
+        return f"No downtime by '{author}' to cancel on {target}.{blocked}"
 
     client = get_client()
     for entry in matches:
         cmd = CMD_DEL_SVC_DOWNTIME if entry.get("service_description") else CMD_DEL_HOST_DOWNTIME
         await client.submit_command(cmd, {"down_id": str(entry.get("downtime_id", ""))})
-    return f"Cancelled {len(matches)} downtime(s): " + ", ".join(_label(e) for e in matches)
+    return (
+        f"Cancelled {len(matches)} downtime(s): " + ", ".join(_label(e) for e in matches) + blocked
+    )
 
 
 @dataclass
