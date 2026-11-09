@@ -2,9 +2,9 @@
 
 > **Version:** 1.1.0
 > **Ratified:** 2026-08-23
-> **Amended:** 2026-10-02
+> **Amended:** 2026-11-09
 > **Status:** Active
-> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.31.0
+> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.36.0
 > **Profile:** MCP Server
 
 This file holds what is specific to mcp-nagios. The fleet rules and the MCP
@@ -21,7 +21,9 @@ restated here.
 - **Input limits:** hostnames, service descriptions and comments are
   length-bounded in the Pydantic models (`extra="forbid"`).
 - **API:** auth travels in the Basic Auth header, never the URL; TLS
-  certificates are always validated; requests time out after 30s.
+  certificates are always validated; requests time out after 30s; every request
+  carries an identifying User-Agent; and a response is capped at 10MB while
+  reading, which a wide `statusjson.cgi` query is the way to hit.
 - **Surface:** the Nagios CGI JSON API (`statusjson.cgi`, `archivejson.cgi`,
   `cmd.cgi`), plus one optional read-only file: `nagios.log` at
   `NAGIOS_LOG_PATH`. archivejson.cgi reads downtime log entries only for

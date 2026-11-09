@@ -6,6 +6,40 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-09
+
+### Fixed
+
+- **A response had no size limit at all.** `statusjson.cgi` on a wide query, or
+  anything else answering on that URL, was read whole into the process. Bodies
+  are now read in bounded pieces under a 10MB cap, measured before each chunk
+  is copied in, and the error says to narrow the query — which is how this gets
+  hit in practice.
+
+- **An error says which site answered, and with what.** A non-200 raised
+  `response.text[:200]` with no method, URL, status or content-type, and this
+  client follows redirects: a CGI behind an SSO proxy answers from somewhere
+  else entirely, and a bare 200 characters of HTML cannot say so. Errors now
+  name all four and quote a bounded snippet.
+
+- **A non-JSON body is reported as one.** `response.json()` on an HTML page
+  raised a bare decode error — the RT #1596 shape.
+
+### Added
+
+- **The client says what it is.** Requests carry
+  `User-Agent: mcp-nagios-crunchtools/<version> (+<repo url>)`, with the
+  version read from installed package metadata.
+
+### Changed
+
+- All three call sites — `statusjson.cgi`, `archivejson.cgi` and `cmd.cgi` —
+  go through one `_request`. Three copies of the transport handling is how this
+  module ended up with no ceiling in any of them.
+
+- Inherits constitution v1.36.0, whose MCP Server profile 1.8.0 states the
+  outbound HTTP contract (RT #1601).
+
 ## [0.9.1] - 2026-11-07
 
 ### Fixed

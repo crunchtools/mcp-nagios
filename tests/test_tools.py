@@ -1145,7 +1145,7 @@ class TestDowntimeListSurvivesACrashedEntry:
         data = {"downtimelist": {"7": _downtime(7, "lotor", "josui")}}
         with _patch_client(_mock_response(json_data=_success_result(data))) as http:
             await list_downtimes()
-        assert http.get.await_count == 1
+        assert http.send.await_count == 1
 
 
 class TestListAndCancelDowntime:

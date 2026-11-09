@@ -57,6 +57,10 @@ def _install_mock_http() -> Iterator[AsyncMock]:
     with patch.object(config_mod, "get_config", return_value=cfg):
         mock_http = AsyncMock(spec=httpx.AsyncClient)
         mock_http.aclose = AsyncMock()
+        # The client streams now: `build_request` then `send(..., stream=True)`.
+        # A real client builds the request, so a test can still dispatch on the
+        # query it was asked and count what went out.
+        mock_http.build_request = MagicMock(side_effect=httpx.Client().build_request)
         nagios_client = client_mod.NagiosClient(cfg)
         nagios_client._client = mock_http
         client_mod._client = nagios_client
@@ -76,11 +80,9 @@ def _patch_client(*responses: httpx.Response) -> Iterator[AsyncMock]:
         raise ValueError("_patch_client requires at least one response")
     with _install_mock_http() as mock_http:
         if len(responses) == 1:
-            mock_http.get = AsyncMock(return_value=responses[0])
-            mock_http.post = AsyncMock(return_value=responses[0])
+            mock_http.send = AsyncMock(return_value=responses[0])
         else:
-            mock_http.get = AsyncMock(side_effect=list(responses))
-            mock_http.post = AsyncMock(side_effect=list(responses))
+            mock_http.send = AsyncMock(side_effect=list(responses))
         yield mock_http
 
 
@@ -96,14 +98,13 @@ def _patch_dispatching_client(
     """
     with _install_mock_http() as mock_http:
 
-        async def _get(_url: str, params: dict[str, str] | None = None) -> httpx.Response:
-            return await reply(params or {})
+        async def _send(request: httpx.Request, **_: object) -> httpx.Response:
+            # cmd.cgi is not a query, so it answers the same way whatever is asked.
+            if request.method == "POST":
+                return _mock_response(
+                    text="Your command request was successfully submitted to Nagios"
+                )
+            return await reply(dict(request.url.params))
 
-        mock_http.get = AsyncMock(side_effect=_get)
-        # cmd.cgi is not a query, so it answers the same way whatever is asked.
-        mock_http.post = AsyncMock(
-            return_value=_mock_response(
-                text="Your command request was successfully submitted to Nagios"
-            )
-        )
+        mock_http.send = AsyncMock(side_effect=_send)
         yield mock_http

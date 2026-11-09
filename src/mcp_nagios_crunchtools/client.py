@@ -1,8 +1,10 @@
 """Nagios CGI JSON API client."""
 
+import json
 import logging
 import re
 import time
+from importlib.metadata import version
 from typing import Any
 
 import httpx
@@ -14,6 +16,45 @@ logger = logging.getLogger(__name__)
 
 HTTP_OK = 200
 HTTP_INTERNAL_ERROR = 500
+
+# A `statusjson.cgi` dump of a large fleet is the biggest body here, and it is
+# the one that has to stay under the limit rather than the one that defines it.
+MAX_RESPONSE_SIZE = 10 * 1024 * 1024
+BODY_SNIPPET_CHARS = 200
+ELLIPSIS = "..."
+
+# Identify this client by name. httpx otherwise sends `python-httpx/<version>`,
+# which bot protection answers with an HTML challenge page instead of the API --
+# the failure that cost an afternoon on mcp-wordpress (RT #1596). The version
+# comes from installed package metadata so it cannot drift from pyproject.toml.
+USER_AGENT = (
+    f"mcp-nagios-crunchtools/{version('mcp-nagios-crunchtools')} "
+    "(+https://github.com/crunchtools/mcp-nagios)"
+)
+
+
+def _body_snippet(body: bytes) -> str:
+    """A short, single-line excerpt of a response body, for an error message."""
+    prefix = body[: BODY_SNIPPET_CHARS * 4]
+    collapsed = " ".join(prefix.decode("utf-8", errors="replace").split())
+    if not collapsed:
+        return "<empty body>"
+    if len(collapsed) > BODY_SNIPPET_CHARS or len(body) > len(prefix):
+        return collapsed[: BODY_SNIPPET_CHARS - len(ELLIPSIS)] + ELLIPSIS
+    return collapsed
+
+
+def _where(response: httpx.Response) -> str:
+    """Which request a response answered, for an error message.
+
+    The URL actually requested, which matters here because this client follows
+    redirects: a CGI behind an SSO proxy answers from somewhere else entirely,
+    and that is the case a bare status code cannot describe.
+    """
+    return (
+        f"{response.request.method} {response.request.url} "
+        f"(HTTP {response.status_code}, {response.headers.get('content-type', 'no content-type')})"
+    )
 
 
 class NagiosClient:
@@ -29,6 +70,7 @@ class NagiosClient:
                 auth=httpx.BasicAuth(self._config.username, self._config.password),
                 timeout=30.0,
                 follow_redirects=True,
+                headers={"User-Agent": USER_AGENT},
             )
         return self._client
 
@@ -37,13 +79,82 @@ class NagiosClient:
             await self._client.aclose()
             self._client = None
 
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[httpx.Response, bytes]:
+        """Send one request and return it with its bounded body.
+
+        One way out of this module, so the agent string, the ceiling and the
+        error detail cannot be forgotten in one of the three call sites -- which
+        is how the previous version had no ceiling at all.
+        """
+        client = await self._get_client()
+        request = client.build_request(method, url, params=params, data=data)
+        try:
+            response = await client.send(request, stream=True)
+            try:
+                body = await self._read_capped(response)
+            finally:
+                await response.aclose()
+        except httpx.TimeoutException as e:
+            raise NagiosApiError(0, f"Request timeout: {e}") from e
+        except httpx.RequestError as e:
+            raise NagiosApiError(0, f"Request failed: {e}") from e
+
+        if response.status_code != HTTP_OK:
+            raise NagiosApiError(
+                response.status_code, f"{_where(response)} returned {_body_snippet(body)}"
+            )
+        return response, body
+
+    @staticmethod
+    async def _read_capped(response: httpx.Response) -> bytes:
+        """Read the body, aborting as soon as it would pass MAX_RESPONSE_SIZE.
+
+        There was no limit here at all: a `statusjson.cgi` query that selected
+        too much, or anything else answering on that URL, was read whole into
+        the process. Measured before each chunk is copied in, because
+        `aiter_bytes()` promises nothing about chunk size.
+        """
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_RESPONSE_SIZE:
+            raise NagiosApiError(
+                response.status_code,
+                f"{_where(response)} declared {declared} bytes, over the "
+                f"{MAX_RESPONSE_SIZE} byte limit",
+            )
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            if len(body) + len(chunk) > MAX_RESPONSE_SIZE:
+                raise NagiosApiError(
+                    response.status_code,
+                    f"{_where(response)} sent over the {MAX_RESPONSE_SIZE} byte limit. "
+                    "Narrow the query.",
+                )
+            body += chunk
+        return bytes(body)
+
+    @staticmethod
+    def _envelope(response: httpx.Response, body: bytes) -> dict[str, Any]:
+        """The decoded CGI envelope, or an error saying what came back instead."""
+        try:
+            envelope: dict[str, Any] = json.loads(body)
+        except ValueError as e:
+            raise NagiosApiError(
+                response.status_code,
+                f"{_where(response)} is not JSON ({e}): {_body_snippet(body)}",
+            ) from e
+        return envelope
+
     async def query_status(self, params: dict[str, str]) -> dict[str, Any]:
         """Query the statusjson.cgi endpoint."""
-        client = await self._get_client()
-        response = await client.get(self._config.status_cgi_url, params=params)
-        if response.status_code != HTTP_OK:
-            raise NagiosApiError(response.status_code, response.text[:200])
-        envelope: dict[str, Any] = response.json()
+        response, body = await self._request("GET", self._config.status_cgi_url, params=params)
+        envelope = self._envelope(response, body)
         result = envelope.get("result", {})
         code = result.get("type_code", -1)
         if code != 0:
@@ -52,11 +163,8 @@ class NagiosClient:
 
     async def query_archive(self, params: dict[str, str]) -> dict[str, Any]:
         """Query the archivejson.cgi endpoint."""
-        client = await self._get_client()
-        response = await client.get(self._config.archive_cgi_url, params=params)
-        if response.status_code != HTTP_OK:
-            raise NagiosApiError(response.status_code, response.text[:200])
-        envelope: dict[str, Any] = response.json()
+        response, body = await self._request("GET", self._config.archive_cgi_url, params=params)
+        envelope = self._envelope(response, body)
         result = envelope.get("result", {})
         code = result.get("type_code", -1)
         if code != 0:
@@ -65,17 +173,15 @@ class NagiosClient:
 
     async def submit_command(self, cmd_typ: int, form_data: dict[str, str]) -> str:
         """Submit a command via cmd.cgi POST."""
-        client = await self._get_client()
         payload = {
             "cmd_typ": str(cmd_typ),
             "cmd_mod": "2",
             "btnSubmit": "Commit",
             **form_data,
         }
-        response = await client.post(self._config.cmd_cgi_url, data=payload)
-        if response.status_code != HTTP_OK:
-            raise NagiosApiError(response.status_code, response.text[:200])
-        body = response.text
+        _, raw = await self._request("POST", self._config.cmd_cgi_url, data=payload)
+        # cmd.cgi answers with an HTML page, not JSON: the text is the result.
+        body = raw.decode("utf-8", errors="replace")
         if "successfully submitted" in body.lower():
             return "Command submitted successfully"
         if "errorMessage" in body:
