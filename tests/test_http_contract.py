@@ -20,6 +20,8 @@ from mcp_nagios_crunchtools.errors import NagiosApiError
 
 Handler = Callable[[httpx.Request], httpx.Response]
 STATUS_URL = "https://nagios.example.com/nagios/cgi-bin/statusjson.cgi"
+ARCHIVE_URL = "https://nagios.example.com/nagios/cgi-bin/archivejson.cgi"
+CMD_URL = "https://nagios.example.com/nagios/cgi-bin/cmd.cgi"
 
 
 async def _chunks(chunk: bytes, times: int) -> AsyncIterator[bytes]:
@@ -35,6 +37,9 @@ def _serving(handler: Handler) -> Iterator[None]:
     cfg.username = "admin"
     cfg.password = "secret"  # gatehouse: allow-secret
     cfg.status_cgi_url = STATUS_URL
+    cfg.archive_cgi_url = ARCHIVE_URL
+    cfg.cmd_cgi_url = CMD_URL
+    cfg.comment_author = "josui"
     cfg.log_path = None
     real = httpx.AsyncClient
 
@@ -151,3 +156,140 @@ class TestErrorNamesTheSite:
         message = str(caught.value)
         assert "Service Unavailable" in message
         assert "HTTP 503" in message
+
+
+class TestEveryEndpointGoesThroughIt:
+    """All three call sites share `_request`, so all three are worth asserting.
+
+    Three copies of the transport handling is how this module ended up with no
+    ceiling in any of them; a test for one of three would be the same mistake
+    in test form.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_archive_endpoint_sends_the_agent_and_bounds_its_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(client_mod, "MAX_RESPONSE_SIZE", 4096)
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers["User-Agent"])
+            return httpx.Response(
+                200, headers={"content-type": "application/json"}, content=_chunks(b"x" * 1024, 16)
+            )
+
+        with _serving(handler), pytest.raises(NagiosApiError) as caught:
+            await client_mod.get_client().query_archive({"query": "alertlist"})
+
+        assert "mcp-nagios-crunchtools/" in seen[0]
+        assert "archivejson.cgi" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_the_command_endpoint_sends_the_agent_and_bounds_its_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(client_mod, "MAX_RESPONSE_SIZE", 4096)
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers["User-Agent"])
+            return httpx.Response(
+                200, headers={"content-type": "text/html"}, content=_chunks(b"x" * 1024, 16)
+            )
+
+        with _serving(handler), pytest.raises(NagiosApiError) as caught:
+            await client_mod.get_client().submit_command(55, {"host": "web01"})
+
+        assert "mcp-nagios-crunchtools/" in seen[0]
+        assert "cmd.cgi" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_the_command_endpoint_returns_its_html_result(self) -> None:
+        """cmd.cgi answers with a page, not JSON: the text is the result."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text="Your command request was successfully submitted to Nagios",
+            )
+
+        with _serving(handler):
+            result = await client_mod.get_client().submit_command(55, {"host": "web01"})
+
+        assert result == "Command submitted successfully"
+
+
+class TestDeclaredLength:
+    """The header is an early reject, not the limit itself."""
+
+    @pytest.mark.asyncio
+    async def test_a_declared_length_over_the_cap_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(client_mod, "MAX_RESPONSE_SIZE", 64)
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, headers={"content-type": "application/json"}, content=b"x" * 128
+            )
+
+        with _serving(handler), pytest.raises(NagiosApiError) as caught:
+            await client_mod.get_client().query_status({"query": "hostlist"})
+
+        assert "declared 128 bytes" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_declared_length_does_not_crash(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            response = httpx.Response(200, json={"result": {"type_code": 0}})
+            response.headers["content-length"] = "not-a-number"
+            return response
+
+        with _serving(handler):
+            envelope = await client_mod.get_client().query_status({"query": "hostlist"})
+
+        assert envelope["result"]["type_code"] == 0
+
+
+class TestTransportFailures:
+    """All three endpoints share these two branches."""
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_becomes_an_api_error(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("timeout")
+
+        with _serving(handler), pytest.raises(NagiosApiError) as caught:
+            await client_mod.get_client().query_status({"query": "hostlist"})
+
+        assert "Request timeout" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_connection_failure_becomes_an_api_error(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("unreachable")
+
+        with _serving(handler), pytest.raises(NagiosApiError) as caught:
+            await client_mod.get_client().query_status({"query": "hostlist"})
+
+        assert "Request failed" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_failure_mid_stream_becomes_an_api_error(self) -> None:
+        """The streaming read is a new failure point: the old code read eagerly."""
+
+        async def failing_stream() -> AsyncIterator[bytes]:
+            yield b'{"result"'
+            raise httpx.ReadTimeout("timeout")
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, headers={"content-type": "application/json"}, content=failing_stream()
+            )
+
+        with _serving(handler), pytest.raises(NagiosApiError) as caught:
+            await client_mod.get_client().query_status({"query": "hostlist"})
+
+        assert "Request timeout" in str(caught.value)
