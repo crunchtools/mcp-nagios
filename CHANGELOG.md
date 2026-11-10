@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-10
+
+### Fixed
+
+- The container installed its dependencies with `pip install .`, which reads
+  only `pyproject.toml`'s floor-pins and resolves fresh at build time -- a
+  dependency set no test had ever run against. The image now installs from
+  the committed, Dependabot-maintained `uv.lock` via a frozen `uv export`, so
+  the shipped versions are the ones CI tested. Same bug as mcp-gemini PR #72
+  and trentina issue #79 (RT #1564).
+
 ## [0.10.0] - 2026-11-09
 
 ### Fixed
