@@ -55,4 +55,4 @@ ENV PATH="/app/venv/bin:$PATH"
 RUN ["python3", "-c", "from mcp_nagios_crunchtools import main; print('Installation verified')"]
 
 EXPOSE 8026
-ENTRYPOINT ["python", "-m", "mcp_nagios_crunchtools"]
+ENTRYPOINT ["python", "-c", "raise SystemExit(1)"]
