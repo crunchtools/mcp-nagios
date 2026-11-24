@@ -94,3 +94,6 @@ skip = ["semgrep"]
 [tool.sdlc.push.pytest]
 env = { NAGIOS_URL = "https://nagios.example.com", NAGIOS_USER = "test_user", NAGIOS_PASS = "test_pass" }
 
+
+[tool.sdlc]
+repo-kinds = ["mcp-server"]
