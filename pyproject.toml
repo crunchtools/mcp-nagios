@@ -96,4 +96,13 @@ env = { NAGIOS_URL = "https://nagios.example.com", NAGIOS_USER = "test_user", NA
 
 
 [tool.sdlc]
+stacks = ["python", "container"]  # gate the Containerfile on every pull request
+# Written by crunchtools/sdlc's scripts/convert_repo.py: moved from the workflows.
+publish = "pypi"
 repo-kinds = ["mcp-server"]
+
+[tool.sdlc.image]
+# Written by crunchtools/sdlc's scripts/convert_repo.py: moved from the workflows.
+image = "quay.io/crunchtools/mcp-nagios"
+boot = "mcp"
+boot-env = "NAGIOS_URL=http://nagios.invalid\nNAGIOS_USER=gate\nNAGIOS_PASS=gate\n"
