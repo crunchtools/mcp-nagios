@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The image installs uv from `container/build-requirements.txt`, sha256-locked for the
+  Linux x86_64 and aarch64 wheels and installed with `--no-deps --require-hashes
+  --only-binary=:all:`, instead of a bare `pip install uv==0.13.7`: a version pin is
+  not a lockfile (constitution S1, #113).
+
 ## [0.11.0] - 2026-11-24
 
 ### Changed

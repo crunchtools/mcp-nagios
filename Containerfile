@@ -3,8 +3,11 @@
 # Stage 1: Lock (turn uv.lock into the exact dependency set to install)
 FROM quay.io/hummingbird/python:3.14-builder AS lock
 USER 0
-RUN pip install --no-cache-dir uv==0.13.7
 WORKDIR /lock
+# uv from PyPI, hash-locked in container/build-requirements.txt: a bare
+# version pin is not a lockfile (constitution S1, #113).
+COPY container/build-requirements.txt ./
+RUN pip install --no-cache-dir --no-deps --require-hashes --only-binary=:all: -r build-requirements.txt
 COPY pyproject.toml uv.lock ./
 RUN uv export --frozen --no-dev --no-emit-project \
       --format requirements-txt -o /requirements.txt
